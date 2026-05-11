@@ -19,8 +19,10 @@ meshio_to_med_type = {
     "line3": "SE3",
     "triangle": "TR3",
     "triangle6": "TR6",
+    "triangle7": "TR7",
     "quad": "QU4",
     "quad8": "QU8",
+    "quad9": "QU9",
     "tetra": "TE4",
     "tetra10": "T10",
     "hexahedron": "HE8",
@@ -29,6 +31,8 @@ meshio_to_med_type = {
     "pyramid13": "P13",
     "wedge": "PE6",
     "wedge15": "P15",
+    "polygon": "POG",
+    "polygon2": "POG2",
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 numpy_void_str = np.bytes_("")
@@ -117,9 +121,18 @@ def read(filename):
     for med_cell_type, med_cell_type_group in med_cells.items():
         cell_type = med_to_meshio_type[med_cell_type]
         cell_types.append(cell_type)
-        nod = med_cell_type_group["NOD"]
-        n_cells = nod.attrs["NBR"]
-        cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
+        if med_cell_type in ["POG", "POG2"]:  # polygonal cells with variable number of nodes
+            nod = med_cell_type_group["NOD"][()] - 1 
+            inn = med_cell_type_group["INN"][()]
+
+            polygons = [
+                nod[inn[i] -1 : inn[i + 1] - 1] for i in range(len(inn) - 1)
+            ]
+            cells.append((cell_type, polygons))
+        else:
+            nod = med_cell_type_group["NOD"]
+            n_cells = nod.attrs["NBR"]
+            cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
 
         # Cell tags
         if "FAM" in med_cell_type_group:

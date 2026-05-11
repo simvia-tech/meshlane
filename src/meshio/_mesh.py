@@ -10,6 +10,7 @@ from ._common import num_nodes_per_cell, warn
 topological_dimension = {
     "line": 1,
     "polygon": 2,
+    "polygon2": 2,
     "triangle": 2,
     "quad": 2,
     "tetra": 3,
@@ -18,6 +19,7 @@ topological_dimension = {
     "pyramid": 3,
     "line3": 1,
     "triangle6": 2,
+    "triangle7": 2,
     "quad9": 2,
     "tetra10": 3,
     "hexahedron27": 3,
@@ -25,6 +27,7 @@ topological_dimension = {
     "pyramid14": 3,
     "vertex": 0,
     "quad8": 2,
+    "quad9": 2,
     "hexahedron20": 3,
     "triangle10": 2,
     "triangle15": 2,
