@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import meshio
-
+from meshio.med._med import numpy_to_med_type
 from . import helpers
 
 h5py = pytest.importorskip("h5py")
@@ -188,6 +188,7 @@ def test_read_med_without_fas(tmp_path):
     assert len(mesh.cells) == 1
     assert mesh.cells[0].type == "triangle"
 
+
 def test_read_med_without_gro(tmp_path):
     """Une famille sans sous-groupe GRO ne doit pas crasher."""
     filename = tmp_path / "no_gro.med"
@@ -215,6 +216,7 @@ def test_read_med_without_gro(tmp_path):
     mesh_out = meshio.med.read(filename)
     assert len(mesh_out.points) > 0
     assert len(mesh_out.cells) > 0
+
 
 def test_write_multi_blocks_same_type_with_cell_data(tmp_path):
     """Multiple blocks of the same type with cell_data must be merged."""
@@ -260,6 +262,7 @@ def test_write_multi_blocks_same_type_with_cell_data(tmp_path):
         if c.type == "triangle"
     ])
     assert np.array_equal(tags, np.array([-1, -1, -2, -2]))
+
 
 def test_read_med_partial_cell_data(tmp_path):
     """A field defined on only one cell type must not crash."""
@@ -325,3 +328,55 @@ def test_read_med_partial_cell_data(tmp_path):
     assert field_data[tetra_idx] is not None
     assert np.isclose(field_data[tetra_idx].flat[0], 42.0)
 
+
+@pytest.mark.parametrize("dtype, expected_med_type", [
+    (np.float32, 4),   # MED_FLOAT32
+    (np.float64, 6),   # MED_FLOAT64
+    (np.int32,   24),  # MED_INT32
+    (np.int64,   26),  # MED_INT64
+])
+def test_med_type_mapping(dtype, expected_med_type):
+    """Check that numpy dtype maps to the correct MED type constant."""
+    data = np.array([1, 2, 3], dtype=dtype)
+    result = numpy_to_med_type[data.dtype]
+    assert result == expected_med_type, (
+        f"dtype={dtype.__name__}: "
+        f"expected {expected_med_type}, got {result}"
+    )
+
+
+def test_med_type_mapping_unknown_dtype():
+    """Unsupported dtype should raise KeyError."""
+    data = np.array([1, 2, 3], dtype=np.complex128)
+    with pytest.raises(KeyError):
+        _ = numpy_to_med_type[data.dtype]
+
+
+@pytest.mark.parametrize("dtype, expected_med_type", [
+    (np.float32, 4),   # MED_FLOAT32
+    (np.float64, 6),   # MED_FLOAT64
+    (np.int32,   24),  # MED_INT32
+    (np.int64,   26),  # MED_INT64
+])
+def test_med_type_preserved_after_write_read(tmp_path, dtype, expected_med_type):
+    """
+    Check that TYP written in HDF5 matches the expected MED type
+    after a meshio write.
+    """
+    filename = tmp_path / f"test_roundtrip_{dtype.__name__}.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    for key in mesh.point_data:
+        mesh.point_data[key] = mesh.point_data[key].astype(dtype)
+
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        if "CHA" in f:
+            for field_name in f["CHA"]:
+                written_type = f["CHA"][field_name].attrs.get("TYP")
+                if written_type is not None:
+                    assert written_type == expected_med_type, (
+                        f"Field '{field_name}', dtype={dtype.__name__}: "
+                        f"TYP={written_type}, expected={expected_med_type}"
+                    )
