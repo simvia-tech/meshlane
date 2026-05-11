@@ -132,6 +132,7 @@ def test_reference_file_with_point_cell_data(tmp_path):
 
     helpers.write_read(tmp_path, meshio.med.write, meshio.med.read, mesh, 1.0e-15)
 
+
 def test_read_med_without_fas(tmp_path):
     """Un fichier MED sans section FAS ne doit pas crasher."""
     filename = tmp_path / "no_fas.med"
@@ -214,3 +215,113 @@ def test_read_med_without_gro(tmp_path):
     mesh_out = meshio.med.read(filename)
     assert len(mesh_out.points) > 0
     assert len(mesh_out.cells) > 0
+
+def test_write_multi_blocks_same_type_with_cell_data(tmp_path):
+    """Multiple blocks of the same type with cell_data must be merged."""
+    from meshio._mesh import CellBlock
+
+    points = np.array([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [2.0, 0.0],
+        [2.0, 1.0],
+    ])
+
+    cells = [
+        CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2]])),
+        CellBlock("triangle", np.array([[1, 4, 5], [1, 5, 3]])),
+    ]
+
+    cell_data = {
+        "cell_tags": [
+            np.array([-1, -1]),
+            np.array([-2, -2]),
+        ]
+    }
+
+    mesh = meshio.Mesh(points, cells, cell_data=cell_data)
+    filename = tmp_path / "multi_blocks.med"
+
+    meshio.med.write(filename, mesh)
+
+    # Re-read: triangles are merged into 1 block
+    mesh_out = meshio.med.read(filename)
+    total_tri = sum(
+        len(c.data) for c in mesh_out.cells if c.type == "triangle"
+    )
+    assert total_tri == 4
+
+    # Cell tags must be merged in the correct order
+    assert "cell_tags" in mesh_out.cell_data
+    tags = np.concatenate([
+        t for c, t in zip(mesh_out.cells, mesh_out.cell_data["cell_tags"])
+        if c.type == "triangle"
+    ])
+    assert np.array_equal(tags, np.array([-1, -1, -2, -2]))
+
+def test_read_med_partial_cell_data(tmp_path):
+    """A field defined on only one cell type must not crash."""
+    filename = tmp_path / "partial.med"
+
+    from meshio._mesh import CellBlock
+
+    points = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+
+    cells = [
+        CellBlock("triangle", np.array([[0, 1, 2]])),
+        CellBlock("tetra", np.array([[0, 1, 2, 3]])),
+    ]
+
+    mesh = meshio.Mesh(points, cells)
+    meshio.med.write(filename, mesh)
+
+    # Add a CHA field only on tetra via h5py
+    with h5py.File(filename, "a") as f:
+        if "CHA" not in f:
+            f.create_group("CHA")
+
+        field = f["CHA"].create_group("test_field")
+        field.attrs.create("MAI", np.bytes_("mesh"))
+        field.attrs.create("TYP", 6)
+        field.attrs.create("UNI", np.bytes_(""))
+        field.attrs.create("UNT", np.bytes_(""))
+        field.attrs.create("NCO", 1)
+        field.attrs.create("NOM", np.bytes_(f"{'':<16}"))
+
+        step = field.create_group("0000000000000000000100000000000000000001")
+        step.attrs.create("NDT", 1)
+        step.attrs.create("NOR", 1)
+        step.attrs.create("PDT", 0.0)
+        step.attrs.create("RDT", -1)
+        step.attrs.create("ROR", -1)
+
+        profile = "MED_NO_PROFILE_INTERNAL"
+        typ = step.create_group("MAI.TE4")
+        typ.attrs.create("GAU", np.bytes_(""))
+        typ.attrs.create("PFL", np.bytes_(profile))
+        pfl = typ.create_group(profile)
+        pfl.attrs.create("NBR", 1)
+        pfl.attrs.create("NGA", 1)
+        pfl.attrs.create("GAU", np.bytes_(""))
+        pfl.create_dataset("CO", data=np.array([42.0]))
+
+    # Must read without TypeError: len() of unsized object
+    mesh_out = meshio.med.read(filename)
+    assert len(mesh_out.cells) >= 2
+
+    # Field must exist on tetra, None on triangle
+    assert "test_field" in mesh_out.cell_data
+    field_data = mesh_out.cell_data["test_field"]
+    tetra_idx = next(
+        i for i, c in enumerate(mesh_out.cells) if c.type == "tetra"
+    )
+    assert field_data[tetra_idx] is not None
+    assert np.isclose(field_data[tetra_idx].flat[0], 42.0)
+
