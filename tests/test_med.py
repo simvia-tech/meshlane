@@ -141,6 +141,7 @@ def test_reference_file_with_point_cell_data(tmp_path):
     helpers.write_read(tmp_path, meshio.med.write, meshio.med.read, mesh, 1.0e-15)
 
 
+
 def test_read_med_without_fas(tmp_path):
     """Un fichier MED sans section FAS ne doit pas crasher."""
     filename = tmp_path / "no_fas.med"
@@ -552,7 +553,6 @@ def test_bitmask_writer_flush(tmp_path):
         assert int(grp.attrs["LAA"]) == 1
 
 
-
 def test_bitmask_written_in_real_med_file(tmp_path):
     """After a full meshio write, bitmask attributes must exist in CHA fields."""
     filename = tmp_path / "test_bitmask_full.med"
@@ -578,3 +578,33 @@ def test_bitmask_written_in_real_med_file(tmp_path):
             assert _bit_test(len_mask, 3), (
                 f"Field '{field_name}': MED_NODE bit not set in LEN"
             )
+
+
+def test_polygonal_cells():
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "voronoi_hex.med"
+
+    mesh = meshio.read(filename)
+
+    # Points
+    assert np.isclose(mesh.points.sum(), 3.869519702231004)
+
+    # Nombre de points
+    assert len(mesh.points) == 124
+
+    # CellBlock : 60 polygones
+    ref_num_cells = {"polygon": 60}
+    assert {
+        cell_block.type: len(cell_block) for cell_block in mesh.cells
+    } == ref_num_cells
+
+    # Vérifier que les polygones ont entre 4 et 7 sommets
+    for cell_block in mesh.cells:
+        if cell_block.type == "polygon":
+            sizes = [len(cell) for cell in cell_block.data]
+            assert min(sizes) == 4
+            assert max(sizes) == 7
+
+    # Point data et Cell data présents
+    assert "point_tags" in mesh.point_data
+    assert "cell_tags" in mesh.cell_data
