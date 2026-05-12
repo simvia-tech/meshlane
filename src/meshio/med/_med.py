@@ -75,8 +75,13 @@ def read(filename):
 
     # Information for point tags
     point_tags = {}
-    fas = mesh["FAS"] if "FAS" in mesh else f["FAS"][mesh_name]
-    if "NOEUD" in fas:
+    if "FAS" in mesh:        # first check for FAS in the mesh, then in the root group, since some MED files have FAS only in the root group
+        fas = mesh["FAS"]
+    elif "FAS" in f and mesh_name in f["FAS"]:
+        fas = f["FAS"][mesh_name]
+    else:
+        fas = None           # if FAS is not found, point_tags will be empty and the mesh.point_tags attribute will be an empty dict
+    if fas is not None and "NOEUD" in fas:
         point_tags = _read_families(fas["NOEUD"])
 
     # CellBlock
@@ -99,7 +104,7 @@ def read(filename):
 
     # Information for cell tags
     cell_tags = {}
-    if "ELEME" in fas:
+    if fas is not None and "ELEME" in fas:
         cell_tags = _read_families(fas["ELEME"])
 
     # Read nodal and cell data if they exist
@@ -201,6 +206,9 @@ def _read_families(fas_data):
     families = {}
     for _, node_set in fas_data.items():
         set_id = node_set.attrs["NUM"]  # unique set id
+        if "GRO" not in node_set:
+            families[set_id] = []
+            continue
         n_subsets = node_set["GRO"].attrs["NBR"]  # number of subsets
         nom_dataset = node_set["GRO"]["NOM"][()]  # (n_subsets, 80) of int8
         name = [None] * n_subsets

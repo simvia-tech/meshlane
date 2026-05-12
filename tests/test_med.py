@@ -131,3 +131,86 @@ def test_reference_file_with_point_cell_data(tmp_path):
     assert np.isclose(np.mean(data_psi, axis=1)[0, 0], data_psi_elem[0])
 
     helpers.write_read(tmp_path, meshio.med.write, meshio.med.read, mesh, 1.0e-15)
+
+def test_read_med_without_fas(tmp_path):
+    """Un fichier MED sans section FAS ne doit pas crasher."""
+    filename = tmp_path / "no_fas.med"
+
+    # Créer un MED minimal sans FAS avec h5py
+    with h5py.File(filename, "w") as f:
+        info = f.create_group("INFOS_GENERALES")
+        info.attrs.create("MAJ", 3)
+        info.attrs.create("MIN", 0)
+        info.attrs.create("REL", 0)
+
+        ens = f.create_group("ENS_MAA")
+        maa = ens.create_group("mesh")
+        maa.attrs.create("DIM", 2)
+        maa.attrs.create("ESP", 2)
+        maa.attrs.create("REP", 0)
+        maa.attrs.create("UNT", np.bytes_(""))
+        maa.attrs.create("UNI", np.bytes_(""))
+        maa.attrs.create("SRT", 1)
+        maa.attrs.create("NOM", np.bytes_(f"{'X':<16}{'Y':<16}"))
+        maa.attrs.create("DES", np.bytes_("test"))
+        maa.attrs.create("TYP", 0)
+
+        step = maa.create_group("-0000000000000000001-0000000000000000001")
+        step.attrs.create("CGT", 1)
+        step.attrs.create("NDT", -1)
+        step.attrs.create("NOR", -1)
+        step.attrs.create("PDT", -1.0)
+
+        # 3 points, 1 triangle — pas de FAS
+        noe = step.create_group("NOE")
+        noe.attrs.create("CGT", 1)
+        noe.attrs.create("CGS", 1)
+        noe.attrs.create("PFL", np.bytes_("MED_NO_PROFILE_INTERNAL"))
+        pts = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 1.0])  # 3 points × 2D, Fortran order
+        coo = noe.create_dataset("COO", data=pts)
+        coo.attrs.create("CGT", 1)
+        coo.attrs.create("NBR", 3)
+
+        mai = step.create_group("MAI")
+        mai.attrs.create("CGT", 1)
+        tr3 = mai.create_group("TR3")
+        tr3.attrs.create("CGT", 1)
+        tr3.attrs.create("CGS", 1)
+        tr3.attrs.create("PFL", np.bytes_("MED_NO_PROFILE_INTERNAL"))
+        nod = tr3.create_dataset("NOD", data=np.array([1, 2, 3]))  # 1-indexed
+        nod.attrs.create("CGT", 1)
+        nod.attrs.create("NBR", 1)
+
+    # Doit lire sans crasher
+    mesh = meshio.med.read(filename)
+    assert len(mesh.points) == 3
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == "triangle"
+
+def test_read_med_without_gro(tmp_path):
+    """Une famille sans sous-groupe GRO ne doit pas crasher."""
+    filename = tmp_path / "no_gro.med"
+
+    # Écrire un mesh normal puis modifier le FAS
+    mesh = helpers.tri_mesh
+    meshio.med.write(filename, mesh)
+
+    # Ajouter une famille SANS GRO dans le FAS
+    with h5py.File(filename, "a") as f:
+        fas_mesh = None
+        if "FAS" in f:
+            for key in f["FAS"]:
+                fas_mesh = f["FAS"][key]
+                break
+
+        if fas_mesh is not None:
+            if "ELEME" not in fas_mesh:
+                fas_mesh.create_group("ELEME")
+            eleme = fas_mesh["ELEME"]
+            fam = eleme.create_group("FAM_NO_GRO")
+            fam.attrs.create("NUM", -99)
+            # Pas de GRO ici
+
+    mesh_out = meshio.med.read(filename)
+    assert len(mesh_out.points) > 0
+    assert len(mesh_out.cells) > 0
