@@ -177,9 +177,9 @@ class Mesh:
                 )
 
             for k in range(len(data)):
-                data[k] = np.asarray(data[k])
-                if len(data[k]) != len(self.cells[k]):
-                    raise ValueError(
+                data[k] = np.atleast_1d(data[k])
+                if len(data[k]) != len(self.cells[k]): 
+                    warn(
                         "Incompatible cell data. "
                         + f"Cell block {k} ('{self.cells[k].type}') "
                         + f"has length {len(self.cells[k])}, but "
