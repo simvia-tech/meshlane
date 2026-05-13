@@ -181,7 +181,7 @@ def test_reference_file_with_entities(
     helpers.write_read(tmp_path, writer, meshio.gmsh.read, mesh, 1.0e-15)
 
 def test_convert_med_to_msh_preserves_metadata(tmp_path):
-    """La conversion MED → MSH doit préserver les tags et field_data."""
+    """MED to MSH conversion must preserve tags and field_data."""
     from meshio._mesh import CellBlock
     from meshio.gmsh.main import _convert_med_tags_to_gmsh
 
@@ -198,7 +198,7 @@ def test_convert_med_to_msh_preserves_metadata(tmp_path):
         CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2], [1, 4, 5], [1, 5, 3]])),
     ]
 
-    # Simuler des données MED : 2 familles → 2 groupes géométriques
+    # Simulate MED data: 2 families, 2 geometric groups
     cell_data = {
         "cell_tags": [np.array([-1, -1, -2, -2])],
     }
@@ -210,26 +210,26 @@ def test_convert_med_to_msh_preserves_metadata(tmp_path):
     # Conversion
     converted = _convert_med_tags_to_gmsh(mesh)
 
-    # Doit avoir 2 blocs (split par cell_tags)
+    # Must have 2 blocks (split by cell_tags)
     assert len(converted.cells) == 2
     assert all(c.type == "triangle" for c in converted.cells)
     assert len(converted.cells[0].data) == 2
     assert len(converted.cells[1].data) == 2
 
-    # gmsh:geometrical doit exister avec des valeurs distinctes
+    # gmsh:geometrical must exist with distinct values
     assert "gmsh:geometrical" in converted.cell_data
     geom_tags = [g[0] for g in converted.cell_data["gmsh:geometrical"]]
     assert geom_tags[0] != geom_tags[1]
 
-    # gmsh:physical doit exister
+    # gmsh:physical must exist
     assert "gmsh:physical" in converted.cell_data
     phys_tags = [p[0] for p in converted.cell_data["gmsh:physical"]]
     assert phys_tags[0] != phys_tags[1]  # group_a ≠ group_b
 
-    # gmsh:dim_tags doit exister
+    # gmsh:dim_tags must exist
     assert "gmsh:dim_tags" in converted.point_data
     assert converted.point_data["gmsh:dim_tags"].shape == (6, 2)
 
-    # field_data doit être reconstruit
+    # field_data must be reconstructed
     assert "group_a" in converted.field_data
     assert "group_b" in converted.field_data

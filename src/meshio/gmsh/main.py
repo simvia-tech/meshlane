@@ -1,11 +1,12 @@
+import copy
 import pathlib
 import struct
-import numpy as np
-import copy
 
-from .._mesh import CellBlock, Mesh
+import numpy as np
+
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
+from .._mesh import CellBlock, Mesh
 from . import _gmsh22, _gmsh40, _gmsh41
 from .common import _fast_forward_to_end_block
 
@@ -115,6 +116,8 @@ register_format(
         "gmsh": lambda f, m, **kwargs: write(f, m, "4.1", **kwargs),
     },
 )
+
+
 def _convert_med_tags_to_gmsh(mesh):
     is_med_data = (
         "cell_tags" in mesh.cell_data
@@ -131,11 +134,12 @@ def _convert_med_tags_to_gmsh(mesh):
     family_groups = getattr(mesh, "cell_tags", {})
     group_names = sorted({n for names in family_groups.values() for n in names})
     group_to_phys = {name: i for i, name in enumerate(group_names, start=1)}
-    fam_to_phys = {} # Mapping from family id to physical tag, for backward compatibility with older meshio versions that used cell_tags for this purpose.
+    # Mapping from family id to physical tag
+    fam_to_phys = {}
     for fam_id, names in family_groups.items():
         if names:
             fam_to_phys[int(fam_id)] = group_to_phys[names[0]]
-   
+
     # Check if we have geometrical tags or cell_tags, and if we need to split cells based on them.
     has_geom = "gmsh:geometrical" in mesh.cell_data
     has_tags = "cell_tags" in mesh.cell_data
