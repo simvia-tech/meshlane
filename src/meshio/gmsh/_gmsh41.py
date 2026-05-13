@@ -215,7 +215,7 @@ def _read_elements(
                     if (
                         physical_tags
                         and field_data[physical_name][1] == dim
-                        and field_data[physical_name][0] in physical_tags[dim][tag]
+                        and field_data[physical_name][0] in physical_tags[dim].get(tag,[])
                     )
                     else 0
                 ),
@@ -228,10 +228,10 @@ def _read_elements(
         )
 
         # Find physical tag, if defined; else it is None.
-        pt = None if not physical_tags else physical_tags[dim][tag]
+        pt = None if not physical_tags else physical_tags[dim].get(tag, None)  # None if entity has no physical tag
         # Bounding entities (of lower dimension) if defined. Else it is None.
         if dim > 0 and bounding_entities:  # Points have no boundaries
-            be = bounding_entities[dim][tag]
+            be = bounding_entities[dim].get(tag, None) 
         else:
             be = None
         data.append((pt, be, tag, tpe, d))

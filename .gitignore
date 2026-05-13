@@ -5,7 +5,6 @@
 *.geo
 *.h5
 *.h5m
-*.msh
 *.off
 *.pvtu
 *.pyc

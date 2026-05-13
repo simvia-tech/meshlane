@@ -275,29 +275,37 @@ def write(filename, mesh):
         family.attrs.create("NBR", len(mesh.points))
 
     # Cells (mailles in French)
-    if len(mesh.cells) != len(np.unique([c.type for c in mesh.cells])):
-        raise WriteError("MED files cannot have two sections of the same cell type.")
-    cells_group = time_step.create_group("MAI")
-    cells_group.attrs.create("CGT", 1)
+    cells_by_type = {}
+    cell_tags_by_type = {}
+
     for k, cell_block in enumerate(mesh.cells):
         cell_type = cell_block.type
-        cells = cell_block.data
+        if cell_type not in cells_by_type:
+            cells_by_type[cell_type] = []
+            cell_tags_by_type[cell_type] = []
+        cells_by_type[cell_type].append(cell_block.data)
+        if "cell_tags" in mesh.cell_data:
+            cell_tags_by_type[cell_type].append(mesh.cell_data["cell_tags"][k])
+    cells_group = time_step.create_group("MAI")
+    cells_group.attrs.create("CGT", 1)
+    for cell_type, cells_list in cells_by_type.items():
+        # Merge cells of the same type
+        merged_cells = np.concatenate(cells_list, axis=0)
         med_type = meshio_to_med_type[cell_type]
         med_cells = cells_group.create_group(med_type)
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
-        nod = med_cells.create_dataset("NOD", data=cells.flatten(order="F") + 1)
+        nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
         nod.attrs.create("CGT", 1)
-        nod.attrs.create("NBR", len(cells))
+        nod.attrs.create("NBR", len(merged_cells))
 
         # Cell tags
-        if "cell_tags" in mesh.cell_data:  # works only for med -> med
-            family = med_cells.create_dataset(
-                "FAM", data=mesh.cell_data["cell_tags"][k]
-            )
+        if cell_tags_by_type.get(cell_type):
+            merged_tags = np.concatenate(cell_tags_by_type[cell_type])
+            family = med_cells.create_dataset("FAM", data=merged_tags)
             family.attrs.create("CGT", 1)
-            family.attrs.create("NBR", len(cells))
+            family.attrs.create("NBR", len(merged_cells))
 
     # Information about point and cell sets (familles in French)
     fas = f.create_group("FAS")
@@ -340,18 +348,22 @@ def write(filename, mesh):
     # Only support writing ELEM fields with only 1 Gauss point per cell
     # Or ELNO (DG) fields defined at every node per cell
     for name, d in mesh.cell_data.items():
-        if name == "cell_tags":  # ignore cell_tags already written under FAS
+        if name in ("cell_tags", "gmsh:physical"):
             continue
+        data_by_type = {}
         for cell, data in zip(mesh.cells, d):
-            # Determine the nature of the cell data
-            # Either shape = (n_data, ) or (n_data, n_components) -> ELEM
-            # or shape = (n_data, n_gauss_points, n_components) -> ELNO or ELGA
-            med_type = meshio_to_med_type[cell.type]
-            if data.ndim <= 2:
+            cell_type = cell.type
+            if cell_type not in data_by_type:
+                data_by_type[cell_type] = []
+            data_by_type[cell_type].append(data)
+        for cell_type, data_list in data_by_type.items():
+            merged_data = np.concatenate(data_list, axis=0)
+            med_type = meshio_to_med_type[cell_type]
+            if merged_data.ndim <= 2:
                 supp = "ELEM"
-            elif data.shape[1] == num_nodes_per_cell[cell.type]:
+            elif merged_data.shape[1] == num_nodes_per_cell[cell_type]:
                 supp = "ELNO"
-            else:  # general ELGA data defined at unknown Gauss points
+            else:
                 supp = "ELGA"
             field_name = field_names[name_idx] if field_names else None
             _write_data(
@@ -361,7 +373,7 @@ def write(filename, mesh):
                 profile,
                 name,
                 supp,
-                data,
+                merged_data,
                 med_type,
             )
         name_idx += 1
