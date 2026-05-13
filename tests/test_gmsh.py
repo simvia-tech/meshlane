@@ -179,3 +179,57 @@ def test_reference_file_with_entities(
     assert num_cells == ref_num_cells_in_cell_sets
 
     helpers.write_read(tmp_path, writer, meshio.gmsh.read, mesh, 1.0e-15)
+
+def test_convert_med_to_msh_preserves_metadata(tmp_path):
+    """MED to MSH conversion must preserve tags and field_data."""
+    from meshio._mesh import CellBlock
+    from meshio.gmsh.main import _convert_med_tags_to_gmsh
+
+    points = np.array([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [2.0, 0.0],
+        [2.0, 1.0],
+    ])
+
+    cells = [
+        CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2], [1, 4, 5], [1, 5, 3]])),
+    ]
+
+    # Simulate MED data: 2 families, 2 geometric groups
+    cell_data = {
+        "cell_tags": [np.array([-1, -1, -2, -2])],
+    }
+
+    mesh = meshio.Mesh(points, cells, cell_data=cell_data)
+    mesh.cell_tags = {-1: ["group_a"], -2: ["group_b"]}
+    mesh.point_tags = {}
+
+    # Conversion
+    converted = _convert_med_tags_to_gmsh(mesh)
+
+    # Must have 2 blocks (split by cell_tags)
+    assert len(converted.cells) == 2
+    assert all(c.type == "triangle" for c in converted.cells)
+    assert len(converted.cells[0].data) == 2
+    assert len(converted.cells[1].data) == 2
+
+    # gmsh:geometrical must exist with distinct values
+    assert "gmsh:geometrical" in converted.cell_data
+    geom_tags = [g[0] for g in converted.cell_data["gmsh:geometrical"]]
+    assert geom_tags[0] != geom_tags[1]
+
+    # gmsh:physical must exist
+    assert "gmsh:physical" in converted.cell_data
+    phys_tags = [p[0] for p in converted.cell_data["gmsh:physical"]]
+    assert phys_tags[0] != phys_tags[1]  # group_a ≠ group_b
+
+    # gmsh:dim_tags must exist
+    assert "gmsh:dim_tags" in converted.point_data
+    assert converted.point_data["gmsh:dim_tags"].shape == (6, 2)
+
+    # field_data must be reconstructed
+    assert "group_a" in converted.field_data
+    assert "group_b" in converted.field_data
