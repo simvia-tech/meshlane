@@ -177,6 +177,8 @@ class Mesh:
                 )
 
             for k in range(len(data)):
+                if data[k] is None:
+                    continue
                 data[k] = np.asarray(data[k])
                 if len(data[k]) != len(self.cells[k]):
                     raise ValueError(
