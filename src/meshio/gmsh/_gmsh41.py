@@ -228,7 +228,7 @@ def _read_elements(
         )
 
         # Find physical tag, if defined; else it is None.
-        pt = None if not physical_tags else physical_tags[dim].get(tag, None) # we used .get() here, since not all entities have a physical tag, and we want to register this as None, not as an empty list
+        pt = None if not physical_tags else physical_tags[dim].get(tag, None)  # None if entity has no physical tag
         # Bounding entities (of lower dimension) if defined. Else it is None.
         if dim > 0 and bounding_entities:  # Points have no boundaries
             be = bounding_entities[dim].get(tag, None) 

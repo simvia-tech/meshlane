@@ -281,15 +281,15 @@ def write(filename, mesh):
     for k, cell_block in enumerate(mesh.cells):
         cell_type = cell_block.type
         if cell_type not in cells_by_type:
-          cells_by_type[cell_type] = []
-          cell_tags_by_type[cell_type] = []
+            cells_by_type[cell_type] = []
+            cell_tags_by_type[cell_type] = []
         cells_by_type[cell_type].append(cell_block.data)
         if "cell_tags" in mesh.cell_data:
-          cell_tags_by_type[cell_type].append(mesh.cell_data["cell_tags"][k])
+            cell_tags_by_type[cell_type].append(mesh.cell_data["cell_tags"][k])
     cells_group = time_step.create_group("MAI")
     cells_group.attrs.create("CGT", 1)
     for cell_type, cells_list in cells_by_type.items():
-    # fusion des cellules
+        # Merge cells of the same type
         merged_cells = np.concatenate(cells_list, axis=0)
         med_type = meshio_to_med_type[cell_type]
         med_cells = cells_group.create_group(med_type)
@@ -299,6 +299,13 @@ def write(filename, mesh):
         nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
         nod.attrs.create("CGT", 1)
         nod.attrs.create("NBR", len(merged_cells))
+
+        # Cell tags
+        if cell_tags_by_type.get(cell_type):
+            merged_tags = np.concatenate(cell_tags_by_type[cell_type])
+            family = med_cells.create_dataset("FAM", data=merged_tags)
+            family.attrs.create("CGT", 1)
+            family.attrs.create("NBR", len(merged_cells))
 
     # Information about point and cell sets (familles in French)
     fas = f.create_group("FAS")
