@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import meshio
@@ -44,3 +45,30 @@ def test_write_buffer(mesh, tmpdir):
     with open(tmp_path, "w") as f:
         meshio.write(f, mesh, "ply")
     assert Path(tmp_path).is_file()
+
+
+def test_msh_format_selection_for_med_data():
+    from meshio._helpers import _pick_best_format
+    from meshio._mesh import CellBlock
+
+    # Minimal points and cells for a valid Mesh
+    points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = [CellBlock("triangle", np.array([[0, 1, 2]]))]
+
+    # Case 1: MED mesh (cell_tags) → gmsh
+    mesh = meshio.Mesh(
+        points, cells,
+        cell_data={"cell_tags": [np.array([-1])]}
+    )
+    assert _pick_best_format(["ansys", "gmsh"], mesh) == "gmsh"
+
+    # Case 2: Gmsh mesh (gmsh:physical) → gmsh
+    mesh2 = meshio.Mesh(
+        points, cells,
+        cell_data={"gmsh:physical": [np.array([1])]}
+    )
+    assert _pick_best_format(["ansys", "gmsh"], mesh2) == "gmsh"
+
+    # Case 3: bare mesh → default (ansys)
+    mesh3 = meshio.Mesh(points, cells)
+    assert _pick_best_format(["ansys", "gmsh"], mesh3) == "ansys"
