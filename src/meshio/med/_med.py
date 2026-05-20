@@ -5,6 +5,8 @@ I/O for MED/Salome, cf.
 
 import numpy as np
 
+from ._med41 import FieldBitmaskWriter
+
 from .._common import num_nodes_per_cell
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
@@ -43,6 +45,18 @@ numpy_to_med_type = {
     np.dtype("int64"): MED_INT64,
 }
 
+# Dictionnaire de traduction pour le tracker MED 4.1
+med_to_geo_type = {
+    "PO1": "MED_POINT1",
+    "SE2": "MED_SEG2", "SE3": "MED_SEG3", "SE4": "MED_SEG4",
+    "TR3": "MED_TRIA3", "TR6": "MED_TRIA6", "TR7": "MED_TRIA7",
+    "QU4": "MED_QUAD4", "QU8": "MED_QUAD8", "QU9": "MED_QUAD9",
+    "TE4": "MED_TETRA4", "T10": "MED_TETRA10",
+    "HE8": "MED_HEXA8", "H20": "MED_HEXA20", "H27": "MED_HEXA27",
+    "PY5": "MED_PYRA5", "P13": "MED_PYRA13",
+    "PE6": "MED_PENTA6", "P15": "MED_PENTA15", "PE18": "MED_PENTA18",
+    "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
+}
 
 def read(filename):
     import h5py
@@ -355,12 +369,15 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     field_names = mesh.field_data["med:nom"] if "med:nom" in mesh.field_data else []
 
     # Nodal data
+    tracker = FieldBitmaskWriter()
+
     for name, data in mesh.point_data.items():
         if name == "point_tags":  # ignore point_tags already written under FAS
             continue
         supp = "NOEU"  # nodal data
         field_name = field_names[name_idx] if field_names else None
         name_idx += 1
+        tracker.notify("MED_NODE", "MED_POINT1", step)
         _write_data(fields, mesh_name, field_name, profile, name, supp, data)
 
     # Cell data
@@ -396,6 +413,8 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
                 med_type,
             )
         name_idx += 1
+    for field_name in fields.keys():
+        tracker.flush(fields[field_name])
 
 
 def _write_data(

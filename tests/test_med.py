@@ -5,6 +5,14 @@ import pytest
 
 import meshio
 from meshio.med._med import numpy_to_med_type
+from meshio.med._med41 import (
+    FieldBitmaskWriter,
+    decode_entity_mask,
+    decode_geo_mask,
+    _bit_set,
+    _bit_test,
+)
+
 from . import helpers
 
 h5py = pytest.importorskip("h5py")
@@ -412,3 +420,161 @@ def test_med_version_default(tmp_path):
         assert int(info.attrs["MIN"]) == 1
         assert int(info.attrs["REL"]) == 0
 
+
+def test_bit_set():
+    """_bit_set sets the correct bit position."""
+    mask = np.uint32(0)
+    mask = _bit_set(mask, 0)  # bit 0 -> 0b00001 = 1
+    assert int(mask) == 1
+
+    mask = _bit_set(mask, 1)  # bit 1 -> 0b00011 = 3
+    assert int(mask) == 3
+
+    mask = _bit_set(mask, 3)  # bit 3 -> 0b01011 = 11
+    assert int(mask) == 11
+
+
+def test_bit_test():
+    """_bit_test detects whether a bit is set."""
+    mask = np.uint32(0b00101)  # bits 0 and 2 set
+    assert _bit_test(mask, 0) is True
+    assert _bit_test(mask, 1) is False
+    assert _bit_test(mask, 2) is True
+    assert _bit_test(mask, 3) is False
+
+
+def test_decode_entity_mask_empty():
+    """A zero mask yields no entities."""
+    result = decode_entity_mask(np.uint32(0))
+    assert result == []
+
+
+def test_decode_entity_mask_node():
+    """Bit 3 = MED_NODE."""
+    mask = np.uint32(0b001000)
+    result = decode_entity_mask(mask)
+    assert result == ["MED_NODE"]
+
+
+def test_decode_entity_mask_cell():
+    """Bit 0 = MED_CELL."""
+    mask = np.uint32(0b000001)
+    result = decode_entity_mask(mask)
+    assert result == ["MED_CELL"]
+
+
+def test_decode_entity_mask_multiple():
+    """Bits 0 and 3 = MED_CELL + MED_NODE."""
+    mask = np.uint32(0b001001)  # bits 0 and 3
+    result = decode_entity_mask(mask)
+    assert "MED_CELL" in result
+    assert "MED_NODE" in result
+    assert len(result) == 2
+
+
+def test_decode_geo_mask_triangle():
+    """MED_TRIA3 is at position 4 in MED_CELL."""
+    # bit 4 -> 0b010000 = 16
+    mask = np.uint32(1 << 4)
+    result = decode_geo_mask("MED_CELL", mask)
+    assert result == ["MED_TRIA3"]
+
+
+def test_decode_geo_mask_empty():
+    """A zero mask yields no geometry types."""
+    result = decode_geo_mask("MED_CELL", np.uint32(0))
+    assert result == []
+
+
+def test_bitmask_writer_notify_node():
+    """After notify on MED_NODE, the global entity mask must have bit 3 set."""
+    writer = FieldBitmaskWriter()
+    step = "0000000000000000000100000000000000000001"
+    writer.notify("MED_NODE", "MED_NO_GEOTYPE", step)
+
+    assert _bit_test(writer._g_entity, 3)
+
+
+def test_bitmask_writer_notify_cell():
+    """After notify on MED_CELL/MED_TRIA3, bit 0 (entity) and bit 4 (geo) must be set."""
+    writer = FieldBitmaskWriter()
+    step = "0000000000000000000100000000000000000001"
+    writer.notify("MED_CELL", "MED_TRIA3", step)
+
+    assert _bit_test(writer._g_entity, 0)
+    # MED_TRIA3 is at index 4 in MED_CELL
+    assert _bit_test(writer._g_geo["MED_CELL"], 4)
+
+
+def test_bitmask_writer_notify_multiple_steps():
+    """Multiple time steps must be tracked separately."""
+    writer = FieldBitmaskWriter()
+    step1 = "0000000000000000000100000000000000000001"
+    step2 = "0000000000000000000200000000000000000002"
+
+    writer.notify("MED_NODE", "MED_NO_GEOTYPE", step1)
+    writer.notify("MED_CELL", "MED_TRIA3", step2)
+
+    # step1: only MED_NODE (bit 3)
+    assert _bit_test(writer._s_entity[step1], 3)
+    assert not _bit_test(writer._s_entity[step1], 0)
+
+    # step2: only MED_CELL (bit 0)
+    assert _bit_test(writer._s_entity[step2], 0)
+    assert not _bit_test(writer._s_entity[step2], 3)
+
+
+def test_bitmask_writer_flush(tmp_path):
+    """flush() must write LEN, LGN, LNA, LAA attributes to the HDF5 field group."""
+    filename = tmp_path / "test_bitmask.med"
+    writer = FieldBitmaskWriter()
+    step = "0000000000000000000100000000000000000001"
+    writer.notify("MED_NODE", "MED_NO_GEOTYPE", step)
+
+    with h5py.File(filename, "w") as f:
+        field_grp = f.create_group("test_field")
+        field_grp.create_group(step)  # step group must exist
+        writer.flush(field_grp)
+
+    with h5py.File(filename, "r") as f:
+        grp = f["test_field"]
+
+        # LEN = global entity mask
+        assert "LEN" in grp.attrs
+        len_mask = np.uint32(int(grp.attrs["LEN"]))
+        assert _bit_test(len_mask, 3)  # MED_NODE = bit 3
+
+        # LNA = number of time steps where MED_NODE is present
+        assert "LNA" in grp.attrs
+
+        # LAA = number of time steps where all entity types are present
+        assert "LAA" in grp.attrs
+        assert int(grp.attrs["LAA"]) == 1
+
+
+
+def test_bitmask_written_in_real_med_file(tmp_path):
+    """After a full meshio write, bitmask attributes must exist in CHA fields."""
+    filename = tmp_path / "test_bitmask_full.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        assert "CHA" in f
+        for field_name in f["CHA"]:
+            field_grp = f["CHA"][field_name]
+
+            assert "LEN" in field_grp.attrs, (
+                f"Field '{field_name}': LEN attribute missing"
+            )
+
+            assert "LAA" in field_grp.attrs, (
+                f"Field '{field_name}': LAA attribute missing"
+            )
+
+            # LEN mask must have MED_NODE (bit 3) set
+            len_mask = np.uint32(int(field_grp.attrs["LEN"]))
+            assert _bit_test(len_mask, 3), (
+                f"Field '{field_name}': MED_NODE bit not set in LEN"
+            )
