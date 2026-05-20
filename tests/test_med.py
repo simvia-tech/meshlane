@@ -589,22 +589,48 @@ def test_polygonal_cells():
     # Points
     assert np.isclose(mesh.points.sum(), 3.869519702231004)
 
-    # Nombre de points
+    # Number of points
     assert len(mesh.points) == 124
 
-    # CellBlock : 60 polygones
+    # CellBlock: 60 polygons
     ref_num_cells = {"polygon": 60}
     assert {
         cell_block.type: len(cell_block) for cell_block in mesh.cells
     } == ref_num_cells
 
-    # Vérifier que les polygones ont entre 4 et 7 sommets
+    # Polygons must have between 4 and 7 vertices
     for cell_block in mesh.cells:
         if cell_block.type == "polygon":
             sizes = [len(cell) for cell in cell_block.data]
             assert min(sizes) == 4
             assert max(sizes) == 7
 
-    # Point data et Cell data présents
+    # Point data and cell data must be present
     assert "point_tags" in mesh.point_data
     assert "cell_tags" in mesh.cell_data
+
+
+def test_polygonal_cells_write_read(tmp_path):
+    """Round-trip: read polygon mesh, write it, read it back."""
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "voronoi_hex.med"
+
+    mesh = meshio.read(filename)
+    out = tmp_path / "polygons_roundtrip.med"
+    meshio.med.write(out, mesh)
+
+    mesh2 = meshio.med.read(out)
+    assert len(mesh2.points) == len(mesh.points)
+    assert np.allclose(mesh2.points, mesh.points)
+
+    # Same number of polygon cells
+    orig_count = sum(len(c) for c in mesh.cells if c.type == "polygon")
+    read_count = sum(len(c) for c in mesh2.cells if c.type == "polygon")
+    assert orig_count == read_count
+
+    # Same polygon sizes
+    for cb1, cb2 in zip(mesh.cells, mesh2.cells):
+        if cb1.type == "polygon":
+            sizes1 = [len(c) for c in cb1.data]
+            sizes2 = [len(c) for c in cb2.data]
+            assert sizes1 == sizes2

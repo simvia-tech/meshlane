@@ -27,7 +27,6 @@ topological_dimension = {
     "pyramid14": 3,
     "vertex": 0,
     "quad8": 2,
-    "quad9": 2,
     "hexahedron20": 3,
     "triangle10": 2,
     "triangle15": 2,
@@ -97,6 +96,8 @@ class CellBlock:
 
         if cell_type.startswith("polyhedron"):
             self.dim = 3
+        elif cell_type.startswith("polygon"):
+            self.dim = 2
         else:
             self.data = np.asarray(self.data)
             self.dim = topological_dimension[cell_type]
@@ -150,7 +151,9 @@ class Mesh:
                     cell_type,
                     # polyhedron data cannot be converted to numpy arrays
                     # because the sublists don't all have the same length
-                    data if cell_type.startswith("polyhedron") else np.asarray(data),
+                    data
+                    if cell_type.startswith(("polyhedron", "polygon"))
+                    else np.asarray(data),
                 )
             self.cells.append(cell_block)
 
@@ -209,7 +212,8 @@ class Mesh:
             for cell_block in self.cells:
                 string = cell_block.type
                 if cell_block.type in special_cells:
-                    string += f"({cell_block.data.shape[1]})"
+                    if isinstance(cell_block.data, np.ndarray):
+                        string += f"({cell_block.data.shape[1]})"
                 lines.append(f"    {string}: {len(cell_block)}")
         else:
             lines.append("  No cells.")
