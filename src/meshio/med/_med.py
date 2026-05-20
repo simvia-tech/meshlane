@@ -43,6 +43,7 @@ numpy_to_med_type = {
     np.dtype("int64"): MED_INT64,
 }
 
+
 def read(filename):
     import h5py
 
@@ -408,13 +409,7 @@ def _write_data(
     try:  # a same MED field may contain fields of different natures
         field = fields.create_group(name)
         field.attrs.create("MAI", np.bytes_(mesh_name))
-        numpy_to_med_type = {
-            np.dtype("float64"): 6,  # MED_FLOAT64
-            np.dtype("float32"): 4,  # MED_FLOAT32
-            np.dtype("int32"): 24,  # MED_INT32
-            np.dtype("int64"): 26,  # MED_INT64
-        }
-        field.attrs.create("TYP", numpy_to_med_type(data.dtype))  # MED_FLOAT64
+        field.attrs.create("TYP", numpy_to_med_type[data.dtype])
         field.attrs.create("UNI", numpy_void_str)  # physical unit
         field.attrs.create("UNT", numpy_void_str)  # time unit
         n_components = 1 if data.ndim == 1 else data.shape[-1]

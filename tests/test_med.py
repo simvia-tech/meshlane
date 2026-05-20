@@ -133,6 +133,7 @@ def test_reference_file_with_point_cell_data(tmp_path):
     helpers.write_read(tmp_path, meshio.med.write, meshio.med.read, mesh, 1.0e-15)
 
 
+<<<<<<< HEAD
 def test_read_med_without_fas(tmp_path):
     """Un fichier MED sans section FAS ne doit pas crasher."""
     filename = tmp_path / "no_fas.med"
@@ -380,3 +381,4 @@ def test_med_type_preserved_after_write_read(tmp_path, dtype, expected_med_type)
                         f"Field '{field_name}', dtype={dtype.__name__}: "
                         f"TYP={written_type}, expected={expected_med_type}"
                     )
+
