@@ -5,7 +5,7 @@ I/O for MED/Salome, cf.
 
 import numpy as np
 
-from meshio.med._med41 import FieldBitmaskWriter
+from ._med41 import FieldBitmaskWriter
 
 from .._common import num_nodes_per_cell
 from .._exceptions import ReadError, WriteError
@@ -369,7 +369,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     field_names = mesh.field_data["med:nom"] if "med:nom" in mesh.field_data else []
 
     # Nodal data
-    tracker = FieldBitmaskWriter()  #Initialisation du tracker pour MED 4.1
+    tracker = FieldBitmaskWriter()
 
     for name, data in mesh.point_data.items():
         if name == "point_tags":  # ignore point_tags already written under FAS
@@ -377,8 +377,8 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         supp = "NOEU"  # nodal data
         field_name = field_names[name_idx] if field_names else None
         name_idx += 1
-        tracker.notify("MED_NODE", "MED_POINT1", "0000000000000000000100000000000000000001")
-        _write_data(fields, mesh_name, field_name, profile, name, supp, data, tracker=tracker)
+        tracker.notify("MED_NODE", "MED_POINT1", step)
+        _write_data(fields, mesh_name, field_name, profile, name, supp, data)
 
     # Cell data
     # Only support writing ELEM fields with only 1 Gauss point per cell
@@ -411,7 +411,6 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
                 supp,
                 merged_data,
                 med_type,
-                tracker=tracker
             )
         name_idx += 1
     for field_name in fields.keys():
@@ -427,7 +426,6 @@ def _write_data(
     supp,
     data,
     med_type=None,
-    tracker=None,
 ):
     # Skip for general ELGA fields defined at unknown Gauss points
     if supp == "ELGA":
