@@ -134,6 +134,7 @@ def test_reference_file_with_point_cell_data(tmp_path):
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def test_read_med_without_fas(tmp_path):
     """Un fichier MED sans section FAS ne doit pas crasher."""
     filename = tmp_path / "no_fas.med"
@@ -381,4 +382,35 @@ def test_med_type_preserved_after_write_read(tmp_path, dtype, expected_med_type)
                         f"Field '{field_name}', dtype={dtype.__name__}: "
                         f"TYP={written_type}, expected={expected_med_type}"
                     )
+
+
+@pytest.mark.parametrize("med_version, expected", [
+    ("4.1.0", (4, 1, 0)),
+    ("4.0.0", (4, 0, 0)),
+    ("3.0.0", (3, 0, 0)),
+])
+def test_med_version_written(tmp_path, med_version, expected):
+    """Check that the specified MED version is written to the HDF5 file."""
+    filename = tmp_path / f"test_v{med_version}.med"
+    mesh = helpers.tri_mesh
+    meshio.med.write(filename, mesh, med_version=med_version)
+
+    with h5py.File(filename, "r") as f:
+        info = f["INFOS_GENERALES"]
+        assert int(info.attrs["MAJ"]) == expected[0]
+        assert int(info.attrs["MIN"]) == expected[1]
+        assert int(info.attrs["REL"]) == expected[2]
+
+
+def test_med_version_default(tmp_path):
+    """Default MED version should be 4.1.0."""
+    filename = tmp_path / "test_default.med"
+    mesh = helpers.tri_mesh
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        info = f["INFOS_GENERALES"]
+        assert int(info.attrs["MAJ"]) == 4
+        assert int(info.attrs["MIN"]) == 1
+        assert int(info.attrs["REL"]) == 0
 
