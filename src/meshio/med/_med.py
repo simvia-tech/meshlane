@@ -19,8 +19,10 @@ meshio_to_med_type = {
     "line3": "SE3",
     "triangle": "TR3",
     "triangle6": "TR6",
+    "triangle7": "TR7",
     "quad": "QU4",
     "quad8": "QU8",
+    "quad9": "QU9",
     "tetra": "TE4",
     "tetra10": "T10",
     "hexahedron": "HE8",
@@ -29,6 +31,8 @@ meshio_to_med_type = {
     "pyramid13": "P13",
     "wedge": "PE6",
     "wedge15": "P15",
+    "polygon": "POG",
+    "polygon2": "POG2",
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 numpy_void_str = np.bytes_("")
@@ -117,9 +121,17 @@ def read(filename):
     for med_cell_type, med_cell_type_group in med_cells.items():
         cell_type = med_to_meshio_type[med_cell_type]
         cell_types.append(cell_type)
-        nod = med_cell_type_group["NOD"]
-        n_cells = nod.attrs["NBR"]
-        cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
+        if med_cell_type in ("POG", "POG2"):  # polygonal cells with variable node count
+            nod = med_cell_type_group["NOD"][()] - 1
+            inn = med_cell_type_group["INN"][()]
+            polygons = [
+                nod[inn[i] - 1 : inn[i + 1] - 1] for i in range(len(inn) - 1)
+            ]
+            cells.append((cell_type, polygons))
+        else:
+            nod = med_cell_type_group["NOD"]
+            n_cells = nod.attrs["NBR"]
+            cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
 
         # Cell tags
         if "FAM" in med_cell_type_group:
@@ -322,23 +334,36 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     cells_group = time_step.create_group("MAI")
     cells_group.attrs.create("CGT", 1)
     for cell_type, cells_list in cells_by_type.items():
-        # Merge cells of the same type
-        merged_cells = np.concatenate(cells_list, axis=0)
         med_type = meshio_to_med_type[cell_type]
         med_cells = cells_group.create_group(med_type)
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
-        nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
-        nod.attrs.create("CGT", 1)
-        nod.attrs.create("NBR", len(merged_cells))
+        if cell_type in ("polygon", "polygon2"):
+            all_polygons = sum(cells_list, [])
+            all_nodes = np.concatenate([c + 1 for c in all_polygons])
+            lengths = [len(c) for c in all_polygons]
+            inn = np.concatenate([[1], np.cumsum(lengths) + 1])
+            nod = med_cells.create_dataset("NOD", data=all_nodes)
+            nod.attrs.create("CGT", 1)
+            nod.attrs.create("NBR", len(all_polygons))
+            inn_ds = med_cells.create_dataset("INN", data=inn)
+            inn_ds.attrs.create("CGT", 1)
+            n_merged = len(all_polygons)
+        else:
+            # Merge cells of the same type
+            merged_cells = np.concatenate(cells_list, axis=0)
+            nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
+            nod.attrs.create("CGT", 1)
+            nod.attrs.create("NBR", len(merged_cells))
+            n_merged = len(merged_cells)
 
         # Cell tags
         if cell_tags_by_type.get(cell_type):
             merged_tags = np.concatenate(cell_tags_by_type[cell_type])
             family = med_cells.create_dataset("FAM", data=merged_tags)
             family.attrs.create("CGT", 1)
-            family.attrs.create("NBR", len(merged_cells))
+            family.attrs.create("NBR", n_merged)
 
     # Information about point and cell sets (familles in French)
     fas = f.create_group("FAS")
