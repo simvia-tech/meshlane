@@ -62,6 +62,18 @@ med_to_geo_type = {
     "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
 }
 
+med_type_to_entity = {
+    "PO1": "MED_NODE_ELEMENT",
+    "SE2": "MED_CELL", "SE3": "MED_CELL", "SE4": "MED_CELL",
+    "TR3": "MED_CELL", "TR6": "MED_CELL", "TR7": "MED_CELL",
+    "QU4": "MED_CELL", "QU8": "MED_CELL", "QU9": "MED_CELL",
+    "TE4": "MED_CELL", "T10": "MED_CELL",
+    "HE8": "MED_CELL", "H20": "MED_CELL", "H27": "MED_CELL",
+    "PY5": "MED_CELL", "P13": "MED_CELL",
+    "PE6": "MED_CELL", "P15": "MED_CELL", "PE18": "MED_CELL",
+    "POG": "MED_CELL", "POG2": "MED_CELL",
+}
+
 def read(filename):
     import h5py
 
@@ -279,6 +291,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     except ValueError:
         major, minor, release = 4, 1, 0
     f = h5py.File(filename, "w")
+    h5py.get_config().track_order = True
 
     # MED file format version
     info = f.create_group("INFOS_GENERALES")
