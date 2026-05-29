@@ -249,9 +249,17 @@ def _read_families(fas_data):
             continue
         n_subsets = node_set["GRO"].attrs["NBR"]  # number of subsets
         nom_dataset = node_set["GRO"]["NOM"][()]  # (n_subsets, 80) of int8
-        name = [None] * n_subsets
-        for i in range(n_subsets):
-            name[i] = "".join([chr(x) for x in nom_dataset[i]]).strip().rstrip("\x00")
+        name = []
+        if n_subsets > 0 and "NOM" in node_set["GRO"]:
+            nom_dataset = node_set["GRO"]["NOM"][()]
+            for i in range(n_subsets):
+                val = nom_dataset[i]
+                raw = (
+                    bytes(val)
+                    if isinstance(val, (bytes, np.bytes_))
+                    else np.asarray(val, dtype=np.uint8).tobytes()
+                )
+            name.append(raw.decode("latin-1").strip().rstrip("\x00"))
         families[set_id] = name
     return families
 
