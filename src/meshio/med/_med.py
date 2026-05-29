@@ -4,12 +4,15 @@ I/O for MED/Salome, cf.
 """
 
 import numpy as np
+import re
+
 
 from ._med41 import FieldBitmaskWriter
 
 from .._common import num_nodes_per_cell
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
+from collections import defaultdict
 from .._mesh import Mesh
 
 # https://docs.salome-platform.org/5/med/dev/med__outils_8hxx.html
@@ -61,6 +64,13 @@ med_to_geo_type = {
     "PE6": "MED_PENTA6", "P15": "MED_PENTA15", "PE18": "MED_PENTA18",
     "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
 }
+
+def _parse_med_field_name(name):
+    """Décompose 'Temperature[2] - 0.5' en ('Temperature', 2, 0.5)."""
+    m = re.match(r"(.+)\[(\d+)\]\s*-\s*([0-9.eE+-]+)$", name)
+    if m:
+        return m.group(1), int(m.group(2)), float(m.group(3))
+    return name, None, None
 
 def read(filename):
     import h5py
