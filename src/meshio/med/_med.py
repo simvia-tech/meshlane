@@ -3,6 +3,8 @@ I/O for MED/Salome, cf.
 <https://docs.salome-platform.org/latest/dev/MEDCoupling/developer/med-file.html>.
 """
 
+from unittest import result
+
 import numpy as np
 
 from ._med41 import FieldBitmaskWriter
@@ -74,6 +76,9 @@ def read(filename):
         raise ReadError(f"Must only contain exactly 1 mesh, found {len(meshes)}.")
     mesh_name = list(meshes)[0]
     mesh = mesh_ensemble[mesh_name]
+    mesh_description = mesh.attrs.get("DES", b"").decode().strip().rstrip("\x00")
+    mesh_unit_time   = mesh.attrs.get("UNT", b"").decode().strip().rstrip("\x00")
+    mesh_unit_coords = mesh.attrs.get("UNI", b"").decode().strip().rstrip("\x00")
 
     dim = mesh.attrs["ESP"]
 
@@ -160,6 +165,10 @@ def read(filename):
     )
     mesh.point_tags = point_tags
     mesh.cell_tags = cell_tags
+    result.mesh_name   = mesh_name
+    result.description = mesh_description
+    result.unit_time   = mesh_unit_time
+    result.unit_coords = mesh_unit_coords
     return mesh
 
 
@@ -281,18 +290,21 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
     # Meshes
     mesh_ensemble = f.create_group("ENS_MAA")
-    mesh_name = "mesh"
+    mesh_name = getattr(mesh, "mesh_name", "mesh")
     med_mesh = mesh_ensemble.create_group(mesh_name)
     med_mesh.attrs.create("DIM", mesh.points.shape[1])  # mesh dimension
     med_mesh.attrs.create("ESP", mesh.points.shape[1])  # spatial dimension
     med_mesh.attrs.create("REP", 0)  # cartesian coordinate system (repère in French)
-    med_mesh.attrs.create("UNT", numpy_void_str)  # time unit
-    med_mesh.attrs.create("UNI", numpy_void_str)  # spatial unit
+    unt  = getattr(mesh, "unit_time", "")
+    uni  = getattr(mesh, "unit_coords", "")
+    desc = getattr(mesh, "description", "Mesh created with meshio")
+    med_mesh.attrs.create("UNT", np.bytes_(unt) if unt else numpy_void_str)
+    med_mesh.attrs.create("UNI", np.bytes_(uni) if uni else numpy_void_str)
     med_mesh.attrs.create("SRT", 1)  # sorting type MED_SORT_ITDT
     # component names:
     names = ["X", "Y", "Z"][: mesh.points.shape[1]]
     med_mesh.attrs.create("NOM", np.bytes_("".join(f"{name:<16}" for name in names)))
-    med_mesh.attrs.create("DES", np.bytes_("Mesh created with meshio"))
+    med_mesh.attrs.create("DES", np.bytes_(desc))
     med_mesh.attrs.create("TYP", 0)  # mesh type (MED_NON_STRUCTURE)
 
     # Time-step
