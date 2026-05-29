@@ -525,19 +525,35 @@ def _family_name(set_id, name):
     return "FAM" + "_" + str(set_id) + "_" + "_".join(name)
 
 
-def _write_families(fm_group, tags):
-    """Write point/cell tag information under FAS/[mesh_name]"""
+def _write_families(fm_group, tags, group_names=None):
+    """Write MED family groups under FAS/[mesh_name]/NOEUD or ELEME.
+
+    A family with no named groups must NOT have a GRO subgroup.
+    GRO/NOM must be a H5T_ARRAY{[80] H5T_NATIVE_CHAR} dataset (one 80-char
+    slot per group name), NOT a H5T_STRING/S80 dataset.
+    """
+    group_names = group_names or {}
     for set_id, name in tags.items():
-        family = fm_group.create_group(_family_name(set_id, name))
+        gname = group_names.get(set_id, _family_name(set_id, name))
+        family = fm_group.create_group(gname)
         family.attrs.create("NUM", set_id)
+
+        if not name:
+            continue  # no groups: omit GRO entirely per MED spec
+
         group = family.create_group("GRO")
-        group.attrs.create("NBR", len(name))  # number of subsets
-        dataset = group.create_dataset("NOM", (len(name),), dtype="80int8")
-        for i in range(len(name)):
-            # make name 80 characters
-            name_80 = name[i] + "\x00" * (80 - len(name[i]))
-            # Needs numpy array, see <https://github.com/h5py/h5py/issues/1735>
-            dataset[i] = np.array([ord(x) for x in name_80])
+        group.attrs.create("NBR", len(name))
+
+        dataset = group.create_dataset("NOM", (len(name),), dtype=np.dtype(("i1", (80,))))
+        buf = np.full((len(name), 80), ord(" "), dtype="i1")
+        for i, n in enumerate(name):
+            name_bytes = n.encode("latin-1", "replace")
+            if len(name_bytes) > 80:
+                raise WriteError(
+                    f"Family name '{n}' is too long for MED format (max 80 bytes)."
+                )
+            buf[i, : len(name_bytes)] = np.frombuffer(name_bytes, dtype="i1")
+        dataset[...] = buf
 
 
 register_format("med", [".med"], read, {"med": write})
