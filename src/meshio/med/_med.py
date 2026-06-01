@@ -64,6 +64,17 @@ med_to_geo_type = {
     "PE6": "MED_PENTA6", "P15": "MED_PENTA15", "PE18": "MED_PENTA18",
     "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
 }
+med_type_to_entity = {
+    "PO1": "MED_NODE_ELEMENT",
+    "SE2": "MED_CELL", "SE3": "MED_CELL", "SE4": "MED_CELL",
+    "TR3": "MED_CELL", "TR6": "MED_CELL", "TR7": "MED_CELL",
+    "QU4": "MED_CELL", "QU8": "MED_CELL", "QU9": "MED_CELL",
+    "TE4": "MED_CELL", "T10": "MED_CELL",
+    "HE8": "MED_CELL", "H20": "MED_CELL", "H27": "MED_CELL",
+    "PY5": "MED_CELL", "P13": "MED_CELL",
+    "PE6": "MED_CELL", "P15": "MED_CELL", "PE18": "MED_CELL",
+    "POG": "MED_CELL", "POG2": "MED_CELL",
+}
 
 def _parse_med_field_name(name):
     """Décompose 'Temperature[2] - 0.5' en ('Temperature', 2, 0.5)."""
