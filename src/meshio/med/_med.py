@@ -525,17 +525,15 @@ def _family_name(set_id, name):
     return "FAM" + "_" + str(set_id) + "_" + "_".join(name)
 
 
-def _write_families(fm_group, tags, group_names=None):
+def _write_families(fm_group, tags):
     """Write MED family groups under FAS/[mesh_name]/NOEUD or ELEME.
 
     A family with no named groups must NOT have a GRO subgroup.
     GRO/NOM must be a H5T_ARRAY{[80] H5T_NATIVE_CHAR} dataset (one 80-char
     slot per group name), NOT a H5T_STRING/S80 dataset.
     """
-    group_names = group_names or {}
     for set_id, name in tags.items():
-        gname = group_names.get(set_id, _family_name(set_id, name))
-        family = fm_group.create_group(gname)
+        family = fm_group.create_group(_family_name(set_id, name))
         family.attrs.create("NUM", set_id)
 
         if not name:
@@ -544,7 +542,9 @@ def _write_families(fm_group, tags, group_names=None):
         group = family.create_group("GRO")
         group.attrs.create("NBR", len(name))
 
-        dataset = group.create_dataset("NOM", (len(name),), dtype=np.dtype(("i1", (80,))))
+        dataset = group.create_dataset(
+            "NOM", (len(name),), dtype=np.dtype(("i1", (80,)))
+        )
         buf = np.full((len(name), 80), ord(" "), dtype="i1")
         for i, n in enumerate(name):
             name_bytes = n.encode("latin-1", "replace")

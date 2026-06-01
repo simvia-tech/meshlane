@@ -634,3 +634,27 @@ def test_polygonal_cells_write_read(tmp_path):
             sizes1 = [len(c) for c in cb1.data]
             sizes2 = [len(c) for c in cb2.data]
             assert sizes1 == sizes2
+
+
+def test_family_group_names_round_trip(tmp_path):
+    """Family group names must survive a write/read round-trip."""
+    filename = tmp_path / "fam_round_trip.med"
+    mesh = helpers.tri_mesh
+    mesh.point_tags = {-1: ["alpha", "beta"], -2: ["gamma"]}
+    meshio.med.write(filename, mesh)
+
+    mesh_out = meshio.med.read(filename)
+    assert mesh_out.point_tags == {-1: ["alpha", "beta"], -2: ["gamma"]}
+
+
+def test_family_with_no_groups_omits_GRO(tmp_path):
+    """A family with an empty group list must NOT create a GRO subgroup."""
+    filename = tmp_path / "fam_empty.med"
+    mesh = helpers.tri_mesh
+    mesh.point_tags = {-42: []}
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        family = f["FAS/mesh/NOEUD/FAM_-42_"]
+        assert "GRO" not in family
+        assert int(family.attrs["NUM"]) == -42
