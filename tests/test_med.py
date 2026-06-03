@@ -1,7 +1,8 @@
 import pathlib
 
 import numpy as np
-import pytest
+import pytest 
+import copy
 
 import meshio
 from meshio.med._med import numpy_to_med_type
@@ -40,6 +41,7 @@ h5py = pytest.importorskip("h5py")
         helpers.add_cell_data(helpers.tri_mesh, [("a", (), np.float64)]),
         helpers.add_cell_data(helpers.tri_mesh, [("a", (2,), np.float64)]),
         helpers.add_cell_data(helpers.tri_mesh, [("a", (3,), np.float64)]),
+        
     ],
 )
 def test_io(mesh, tmp_path):
@@ -780,3 +782,97 @@ def test_family_name_too_long_raises_write_error(tmp_path):
     filename = tmp_path / "toolong.med"
     with pytest.raises(WriteError, match="too long"):
         meshio.med.write(filename, mesh)
+
+
+def test_metadata_defaults_roundtrip(tmp_path):
+    """A bare mesh (no metadata set) must come back with the documented
+    defaults. This single test covers every default/empty branch of write():
+    `getattr(..., "mesh")`, the `numpy_void_str` fallback for empty units, and
+    the default description string. Those branches are otherwise executed but
+    never asserted, so a broken default would go unnoticed.
+    """
+    filename = tmp_path / "defaults.med"
+    meshio.med.write(filename, helpers.tri_mesh)  # not mutated -> no deepcopy
+ 
+    out = meshio.med.read(filename)
+ 
+    assert out.mesh_name == "mesh"
+    assert out.description == "Mesh created with meshio"
+    assert out.unit_time == ""
+    assert out.unit_coords == ""
+ 
+ 
+@pytest.mark.parametrize(
+    "attr, med_key, value",
+    [
+        ("description", "DES", "My simulation mesh"),
+        ("unit_time", "UNT", "s"),
+        ("unit_coords", "UNI", "m"),
+    ],
+)
+def test_metadata_custom_roundtrip(tmp_path, attr, med_key, value):
+    """A custom value set on the Mesh object must survive the full loop:
+    write (write-side getattr picks it up) -> read (read-side reads it back)
+    -> write again (the value read from disk is re-written). The final HDF5
+    check proves write() did not silently fall back to its default.
+    """
+    f1 = tmp_path / "custom_a.med"
+    f2 = tmp_path / "custom_b.med"
+ 
+    mesh = copy.deepcopy(helpers.tri_mesh)
+    setattr(mesh, attr, value)
+    meshio.med.write(f1, mesh)
+ 
+    # Read side: the attribute is reconstructed on the Mesh object.
+    out = meshio.med.read(f1)
+    assert getattr(out, attr) == value
+ 
+    # Write side: the value must be written back, not overwritten by a default.
+    meshio.med.write(f2, out)
+    with h5py.File(f2, "r") as f:
+        name = next(iter(f["ENS_MAA"]))
+        stored = f["ENS_MAA"][name].attrs[med_key].decode().rstrip("\x00")
+        assert stored == value
+ 
+ 
+def test_mesh_name_roundtrip(tmp_path):
+    """The mesh name is stored as the ENS_MAA group key (not as an attribute),
+    so it has its own code path and gets its own test. Setting `mesh_name` and
+    letting write() build the file keeps ENS_MAA/<name> and FAS/<name>
+    consistent -- unlike a manual HDF5 group rename, which would leave a
+    dangling FAS group.
+    """
+    f1 = tmp_path / "name_a.med"
+    f2 = tmp_path / "name_b.med"
+ 
+    mesh = copy.deepcopy(helpers.tri_mesh)
+    mesh.mesh_name = "my_custom_mesh"
+    meshio.med.write(f1, mesh)
+ 
+    out = meshio.med.read(f1)
+    assert out.mesh_name == "my_custom_mesh"
+ 
+    # The custom name must be preserved on the next write, and the default
+    # name "mesh" must not reappear.
+    meshio.med.write(f2, out)
+    with h5py.File(f2, "r") as f:
+        assert "my_custom_mesh" in f["ENS_MAA"]
+        assert "mesh" not in f["ENS_MAA"]
+ 
+ 
+def test_read_strips_surrounding_whitespace(tmp_path):
+    """MED files written by other tools (e.g. Salome) may pad fixed-width
+    string fields. This justifies the `.strip()` cleanup in read(). We inject
+    leading/trailing spaces directly into the HDF5 attribute (spaces survive
+    the storage round-trip, unlike trailing NULs which both numpy and h5py
+    drop) and check that read() returns the trimmed value.
+    """
+    filename = tmp_path / "padded.med"
+    meshio.med.write(filename, helpers.tri_mesh)
+ 
+    with h5py.File(filename, "a") as f:
+        name = next(iter(f["ENS_MAA"]))
+        f["ENS_MAA"][name].attrs["DES"] = np.bytes_("   Salome mesh   ")
+ 
+    out = meshio.med.read(filename)
+    assert out.description == "Salome mesh"
