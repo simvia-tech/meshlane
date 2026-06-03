@@ -876,3 +876,33 @@ def test_read_strips_surrounding_whitespace(tmp_path):
  
     out = meshio.med.read(filename)
     assert out.description == "Salome mesh"
+
+
+def test_point_tag_groups_attribute_exists_after_read():
+    """
+    After reading, the Mesh must have the point_tag_groups attribute.
+    """
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "cylinder.med"
+    mesh_out = meshio.med.read(filename)
+    assert hasattr(mesh_out, "point_tag_groups"), (
+        "The Mesh must have the point_tag_groups attribute"
+    )
+    assert isinstance(mesh_out.point_tag_groups, dict), (
+        "point_tag_groups must be a dict"
+    )
+
+
+def test_cell_tag_groups_attribute_exists_after_read():
+    """
+    After reading, the Mesh must have the cell_tag_groups attribute.
+    """
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "cylinder.med"
+    mesh_out = meshio.med.read(filename)
+    assert hasattr(mesh_out, "cell_tag_groups"), (
+        "The Mesh must have the cell_tag_groups attribute"
+    )
+    assert isinstance(mesh_out.cell_tag_groups, dict), (
+        "cell_tag_groups must be a dict"
+    )
