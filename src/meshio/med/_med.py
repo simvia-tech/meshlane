@@ -427,59 +427,162 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         pass
 
     # Write nodal/cell data
+        # Fields
+    has_point_data = any(k != "point_tags" for k in mesh.point_data)
+    has_cell_data = any(k not in ("cell_tags", "gmsh:physical") for k in mesh.cell_data)
+
+    if not has_point_data and not has_cell_data:
+        f.close()
+        return
+
     fields = f.create_group("CHA")
-
+    field_comp_names = mesh.field_data.get("med:nom", [])
     name_idx = 0
-    field_names = mesh.field_data["med:nom"] if "med:nom" in mesh.field_data else []
 
-    # Nodal data
-    tracker = FieldBitmaskWriter()
-
+    # Nodal data grouped by base field name for multi-timestep support
+    nodal_groups = defaultdict(list)
     for name, data in mesh.point_data.items():
-        if name == "point_tags":  # ignore point_tags already written under FAS
+        if name == "point_tags":
             continue
-        supp = "NOEU"  # nodal data
-        field_name = field_names[name_idx] if field_names else None
-        name_idx += 1
-        tracker.notify("MED_NODE", "MED_POINT1", step)
-        _write_data(fields, mesh_name, field_name, profile, name, supp, data)
+        base, idx, pdt = _parse_med_field_name(name)
+        nodal_groups[base].append((idx, pdt, data))
 
-    # Cell data
-    # Only support writing ELEM fields with only 1 Gauss point per cell
-    # Or ELNO (DG) fields defined at every node per cell
+    for base_name, entries in nodal_groups.items():
+        entries.sort(key=lambda x: x[0] if x[0] is not None else 0)
+        comp_name = field_comp_names[name_idx] if name_idx < len(field_comp_names) else None
+        name_idx += 1
+
+        first_data = entries[0][2]
+        n_components = 1 if first_data.ndim == 1 else first_data.shape[-1]
+
+        try:
+            field = fields.create_group(base_name)
+            field.attrs.create("MAI", np.bytes_(mesh_name))
+            field.attrs.create("TYP", numpy_to_med_type.get(first_data.dtype, MED_FLOAT64))
+            field.attrs.create("NCO", n_components)
+            field.attrs.create("UNI", numpy_void_str)
+            field.attrs.create("UNT", numpy_void_str)
+            nom = (
+                np.bytes_("".join(f"{n:<16}" for n in comp_name))
+                if comp_name
+                else np.bytes_(f"{'':<16}")
+            )
+            field.attrs.create("NOM", nom)
+        except ValueError:
+            field = fields[base_name]
+
+        tracker = FieldBitmaskWriter()
+
+        for i, (idx, pdt_orig, data) in enumerate(entries):
+            ndt = i + 1
+            nor = -1
+            pdt = pdt_orig if pdt_orig is not None else 0.0
+            step_name = f"{ndt:020d}{nor:020d}"
+            if step_name not in field:
+                ts = field.create_group(step_name)
+                ts.attrs.create("NDT", ndt)
+                ts.attrs.create("NOR", nor)
+                ts.attrs.create("PDT", pdt)
+                ts.attrs.create("RDT", -1)
+                ts.attrs.create("ROR", -1)
+            else:
+                ts = field[step_name]
+
+            typ = ts.create_group("NOE")
+            typ.attrs.create("GAU", numpy_void_str)
+            typ.attrs.create("PFL", np.bytes_(profile))
+            profile_grp = typ.create_group(profile)
+            profile_grp.attrs.create("NBR", len(data))
+            profile_grp.attrs.create("NGA", 1)
+            profile_grp.attrs.create("GAU", numpy_void_str)
+            profile_grp.create_dataset("CO", data=data.flatten(order="F"))
+            tracker.notify("MED_NODE", "MED_NO_GEOTYPE", step_name)
+
+        tracker.flush(field)
+
+    # Cell data grouped by base field name for multi-timestep support
+    cell_groups = defaultdict(list)
     for name, d in mesh.cell_data.items():
         if name in ("cell_tags", "gmsh:physical"):
             continue
-        data_by_type = {}
+        base, idx, pdt_orig = _parse_med_field_name(name)
         for cell, data in zip(mesh.cells, d):
-            cell_type = cell.type
-            if cell_type not in data_by_type:
-                data_by_type[cell_type] = []
-            data_by_type[cell_type].append(data)
-        for cell_type, data_list in data_by_type.items():
-            merged_data = np.concatenate(data_list, axis=0)
-            med_type = meshio_to_med_type[cell_type]
-            if merged_data.ndim <= 2:
-                supp = "ELEM"
-            elif merged_data.shape[1] == num_nodes_per_cell[cell_type]:
-                supp = "ELNO"
-            else:
-                supp = "ELGA"
-            field_name = field_names[name_idx] if field_names else None
-            _write_data(
-                fields,
-                mesh_name,
-                field_name,
-                profile,
-                name,
-                supp,
-                merged_data,
-                med_type,
-            )
-        name_idx += 1
-    for field_name in fields.keys():
-        tracker.flush(fields[field_name])
+            if data is None:
+                continue
+            cell_groups[base].append((idx, pdt_orig, cell.type, data))
 
+    for base_name, entries in cell_groups.items():
+        entries.sort(key=lambda x: x[0] if x[0] is not None else 0)
+        comp_name = field_comp_names[name_idx] if name_idx < len(field_comp_names) else None
+        name_idx += 1
+
+        first_data = entries[0][3]
+        n_components = 1 if first_data.ndim == 1 else first_data.shape[-1]
+
+        try:
+            field = fields.create_group(base_name)
+            field.attrs.create("MAI", np.bytes_(mesh_name))
+            field.attrs.create("TYP", numpy_to_med_type.get(first_data.dtype, MED_FLOAT64))
+            field.attrs.create("NCO", n_components)
+            field.attrs.create("UNI", numpy_void_str)
+            field.attrs.create("UNT", numpy_void_str)
+            nom = (
+                np.bytes_("".join(f"{n:<16}" for n in comp_name))
+                if comp_name
+                else np.bytes_(f"{'':<16}")
+            )
+            field.attrs.create("NOM", nom)
+        except ValueError:
+            field = fields[base_name]
+
+        tracker = FieldBitmaskWriter()
+
+        for i, (idx, pdt_orig, cell_type, data) in enumerate(entries):
+            if data.dtype == object:
+                continue
+            med_type = meshio_to_med_type[cell_type]
+
+            if data.ndim > 2:
+                if data.shape[1] == num_nodes_per_cell[cell_type]:
+                    supp = "ELNO"
+                else:
+                    continue
+            else:
+                supp = "ELEM"
+
+            ndt = i + 1
+            nor = -1
+            pdt = pdt_orig if pdt_orig is not None else 0.0
+            step_name = f"{ndt:020d}{nor:020d}"
+
+            if step_name not in field:
+                ts = field.create_group(step_name)
+                ts.attrs.create("NDT", ndt)
+                ts.attrs.create("NOR", nor)
+                ts.attrs.create("PDT", pdt)
+                ts.attrs.create("RDT", -1)
+                ts.attrs.create("ROR", -1)
+            else:
+                ts = field[step_name]
+
+            if supp == "ELNO":
+                typ = ts.create_group("NOE." + med_type)
+            else:
+                typ = ts.create_group("MAI." + med_type)
+
+            typ.attrs.create("GAU", numpy_void_str)
+            typ.attrs.create("PFL", np.bytes_(profile))
+            profile_grp = typ.create_group(profile)
+            profile_grp.attrs.create("NBR", len(data))
+            profile_grp.attrs.create("NGA", data.shape[1] if supp == "ELNO" else 1)
+            profile_grp.attrs.create("GAU", numpy_void_str)
+            profile_grp.create_dataset("CO", data=data.flatten(order="F"))
+
+            tracker.notify("MED_CELL", med_to_geo_type.get(med_type, med_type), step_name)
+
+        tracker.flush(field)
+
+    f.close()
 
 def _write_data(
     fields,
