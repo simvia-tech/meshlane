@@ -634,3 +634,111 @@ def test_polygonal_cells_write_read(tmp_path):
             sizes1 = [len(c) for c in cb1.data]
             sizes2 = [len(c) for c in cb2.data]
             assert sizes1 == sizes2
+def test_parse_med_field_name_single():
+    """
+    _parse_med_field_name sur un nom sans pattern
+    doit retourner (name, None, None).
+    """
+    from meshio.med._med import _parse_med_field_name
+
+    base, idx, pdt = _parse_med_field_name("Temperature")
+    assert base == "Temperature"
+    assert idx is None
+    assert pdt is None
+
+
+def test_parse_med_field_name_multi():
+    """
+    _parse_med_field_name doit décomposer 'Temperature[2] - 1.5'
+    en ('Temperature', 2, 1.5).
+    """
+    from meshio.med._med import _parse_med_field_name
+
+    base, idx, pdt = _parse_med_field_name("Temperature[2] - 1.5")
+    assert base == "Temperature"
+    assert idx == 2
+    assert pdt == pytest.approx(1.5)
+
+
+def test_multi_timestep_grouped_under_single_hdf5_field(tmp_path):
+    """
+    Plusieurs timesteps d'un même champ doivent être écrits
+    sous un seul groupe HDF5 dans CHA, pas comme des champs séparés.
+    Sans PR16, chaque 'Temperature[i] - t' créait un groupe séparé.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    points = np.array([
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0], [1.0, 1.0, 0.0],
+    ])
+    cells = [CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2]]))]
+    mesh = Mesh(
+        points, cells,
+        point_data={
+            "Temperature[0] - 0.0": np.array([1.0, 2.0, 3.0, 4.0]),
+            "Temperature[1] - 1.0": np.array([5.0, 6.0, 7.0, 8.0]),
+        },
+    )
+    filename = tmp_path / "multi_ts.med"
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        assert "CHA" in f, "Le groupe CHA doit exister"
+        cha_keys = list(f["CHA"].keys())
+
+        assert "Temperature" in cha_keys, (
+            "Les timesteps doivent être regroupés sous 'Temperature'"
+        )
+        assert "Temperature[0] - 0.0" not in cha_keys, (
+            "Le nom avec [0] ne doit pas être un champ séparé"
+        )
+        assert "Temperature[1] - 1.0" not in cha_keys, (
+            "Le nom avec [1] ne doit pas être un champ séparé"
+        )
+        assert len(f["CHA"]["Temperature"].keys()) == 2, (
+            "Il doit y avoir exactement 2 sous-groupes de timestep"
+        )
+
+
+def test_no_cha_group_when_no_fields(tmp_path):
+    """
+    Sans champs, le groupe CHA ne doit pas être créé.
+    Sans PR16, CHA était toujours créé même vide.
+    """
+    mesh = helpers.tri_mesh
+    filename = tmp_path / "no_fields.med"
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        assert "CHA" not in f, (
+            "Le groupe CHA ne doit pas exister quand il n'y a pas de champs"
+        )
+
+
+def test_multi_timestep_roundtrip_box(tmp_path):
+    """
+    Un fichier MED avec plusieurs timesteps doit survivre
+    à un cycle read→write avec les bonnes valeurs.
+    On utilise box.med qui contient déjà des champs.
+    """
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "box.med"
+    filename_out = tmp_path / "box_roundtrip.med"
+
+    mesh_out = meshio.med.read(filename)
+    meshio.med.write(filename_out, mesh_out)
+
+    mesh_rt = meshio.med.read(filename_out)
+
+    for key in mesh_out.point_data:
+        if key == "point_tags":
+            continue
+        assert key in mesh_rt.point_data, (
+            f"Le champ nodal '{key}' doit être présent après round-trip"
+        )
+        assert np.allclose(
+            mesh_out.point_data[key],
+            mesh_rt.point_data[key],
+            equal_nan=True,
+        ), f"Les valeurs du champ '{key}' doivent être identiques après round-trip"
