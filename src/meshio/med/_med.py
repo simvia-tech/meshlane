@@ -165,10 +165,10 @@ def read(filename):
     )
     mesh.point_tags = point_tags
     mesh.cell_tags = cell_tags
-    result.mesh_name   = mesh_name
-    result.description = mesh_description
-    result.unit_time   = mesh_unit_time
-    result.unit_coords = mesh_unit_coords
+    mesh.mesh_name   = mesh_name
+    mesh.description = mesh_description
+    mesh.unit_time   = mesh_unit_time
+    mesh.unit_coords = mesh_unit_coords
     return mesh
 
 
