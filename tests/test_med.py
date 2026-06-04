@@ -1016,3 +1016,127 @@ def test_multi_timestep_roundtrip_box(tmp_path):
             mesh_rt.point_data[key],
             equal_nan=True,
         ), f"Les valeurs du champ '{key}' doivent être identiques après round-trip"
+
+
+def test_field_units_preserved_after_read(tmp_path):
+    """
+    Field units (UNI, UNT) must be read and stored in
+    field_data['med:field_units'].
+    Without PR14, these were ignored on read.
+    """
+    filename = tmp_path / "field_units.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "a") as f:
+        for field_name in f["CHA"]:
+            f["CHA"][field_name].attrs["UNI"] = np.bytes_("Pa")
+            f["CHA"][field_name].attrs["UNT"] = np.bytes_("s")
+
+    mesh_out = meshio.med.read(filename)
+
+    assert "med:field_units" in mesh_out.field_data, (
+        "field_data must contain 'med:field_units' after read"
+    )
+    for field_name, (uni, unt) in mesh_out.field_data["med:field_units"].items():
+        assert uni == np.bytes_("Pa"), (
+            f"UNI of field '{field_name}': expected b'Pa', got {uni}"
+        )
+        assert unt == np.bytes_("s"), (
+            f"UNT of field '{field_name}': expected b's', got {unt}"
+        )
+
+
+def test_field_units_roundtrip(tmp_path):
+    """
+    Field units must survive a read->write cycle.
+    Without PR14, write() always overwrote units with empty strings.
+    """
+    filename1 = tmp_path / "field_units_orig.med"
+    filename2 = tmp_path / "field_units_rt.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    meshio.med.write(filename1, mesh)
+
+    with h5py.File(filename1, "a") as f:
+        for field_name in f["CHA"]:
+            f["CHA"][field_name].attrs["UNI"] = np.bytes_("MPa")
+            f["CHA"][field_name].attrs["UNT"] = np.bytes_("s")
+
+    mesh_out = meshio.med.read(filename1)
+    meshio.med.write(filename2, mesh_out)
+
+    with h5py.File(filename2, "r") as f:
+        for field_name in f["CHA"]:
+            assert f["CHA"][field_name].attrs["UNI"] == np.bytes_("MPa"), (
+                f"UNI of field '{field_name}' must be preserved after round-trip"
+            )
+            assert f["CHA"][field_name].attrs["UNT"] == np.bytes_("s"), (
+                f"UNT of field '{field_name}' must be preserved after round-trip"
+            )
+
+
+def test_step_metadata_preserved_after_read(tmp_path):
+    """
+    Timestep metadata NDT, NOR, PDT must be read and stored in
+    field_data['med:step_meta'].
+    Without PR14, these were ignored on read.
+    """
+    filename = tmp_path / "step_meta.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "a") as f:
+        for field_name in f["CHA"]:
+            ts_name = list(f["CHA"][field_name].keys())[0]
+            f["CHA"][field_name][ts_name].attrs["NDT"] = 7
+            f["CHA"][field_name][ts_name].attrs["NOR"] = 3
+            f["CHA"][field_name][ts_name].attrs["PDT"] = 2.5
+
+    mesh_out = meshio.med.read(filename)
+
+    assert "med:step_meta" in mesh_out.field_data, (
+        "field_data must contain 'med:step_meta' after read"
+    )
+    for field_name, meta_list in mesh_out.field_data["med:step_meta"].items():
+        assert len(meta_list) >= 1
+        meta = meta_list[0]
+        assert meta["ndt"] == 7, f"NDT expected 7, got {meta['ndt']}"
+        assert meta["nor"] == 3, f"NOR expected 3, got {meta['nor']}"
+        assert meta["pdt"] == pytest.approx(2.5), (
+            f"PDT expected 2.5, got {meta['pdt']}"
+        )
+
+
+def test_step_metadata_roundtrip(tmp_path):
+    """
+    NDT, NOR, PDT must survive a read->write cycle.
+    Without PR14, write() always overwrote them with 1/1/0.0.
+    """
+    filename1 = tmp_path / "step_meta_orig.med"
+    filename2 = tmp_path / "step_meta_rt.med"
+
+    mesh = helpers.add_point_data(helpers.tri_mesh, 1)
+    meshio.med.write(filename1, mesh)
+
+    with h5py.File(filename1, "a") as f:
+        for field_name in f["CHA"]:
+            ts_name = list(f["CHA"][field_name].keys())[0]
+            f["CHA"][field_name][ts_name].attrs["NDT"] = 10
+            f["CHA"][field_name][ts_name].attrs["NOR"] = 5
+            f["CHA"][field_name][ts_name].attrs["PDT"] = 3.14
+
+    mesh_out = meshio.med.read(filename1)
+    meshio.med.write(filename2, mesh_out)
+
+    with h5py.File(filename2, "r") as f:
+        for field_name in f["CHA"]:
+            ts_name = list(f["CHA"][field_name].keys())[0]
+            ts = f["CHA"][field_name][ts_name]
+            assert ts.attrs["NDT"] == 10, "NDT must be preserved after round-trip"
+            assert ts.attrs["NOR"] == 5, "NOR must be preserved after round-trip"
+            assert ts.attrs["PDT"] == pytest.approx(3.14), (
+                "PDT must be preserved after round-trip"
+            )

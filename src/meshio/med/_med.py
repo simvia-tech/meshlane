@@ -198,71 +198,61 @@ def read(filename):
 def _read_data(fields, profiles, cell_types, point_data, cell_data, field_data):
     if "med:field_units" not in field_data:
         field_data["med:field_units"] = {}
-        field_data["med:field_units"][name] = (
-        data.attrs.get("UNI", numpy_void_str),
-        data.attrs.get("UNT", numpy_void_str),
-    )
-
     if "med:step_meta" not in field_data:
         field_data["med:step_meta"] = {}
+
+    for name, data in fields.items():
+        # Preserve field units
+        field_data["med:field_units"][name] = (
+            data.attrs.get("UNI", numpy_void_str),
+            data.attrs.get("UNT", numpy_void_str),
+        )
         field_data["med:step_meta"][name] = []
 
-    # REMPLACER le bloc time_step :
-    time_step = sorted(data.keys())
-    if len(time_step) == 1:
-        names = [name]
-        key = time_step[0]
-        med_data = data[key]
-        field_data["med:step_meta"][name].append({
-            "ndt": med_data.attrs.get("NDT", 0),
-            "nor": med_data.attrs.get("NOR", -1),
-            "pdt": med_data.attrs["PDT"],
-            "key": key,
-        })
-    else:
-        names = []
-        for i, key in enumerate(time_step):
-            med_data = data[key]
-            t = med_data.attrs["PDT"]
-            field_data["med:step_meta"][name].append({
-                "ndt": med_data.attrs.get("NDT", i),
-                "nor": med_data.attrs.get("NOR", -1),
-                "pdt": t,
-                "key": key,
-            })
-            names.append(name + f"[{i:d}] - {t:g}")
-    for name, data in fields.items():
         if "NOM" in data.attrs:
             if "med:nom" not in field_data:
                 field_data["med:nom"] = []
             field_data["med:nom"].append(data.attrs["NOM"].decode().split())
 
-        time_step = sorted(data.keys())  # associated time-steps
-        if len(time_step) == 1:  # single time-step
-            names = [name]  # do not change field name
-        else:  # many time-steps
-            names = [None] * len(time_step)
+        time_step = sorted(data.keys())
+        if len(time_step) == 1:
+            names = [name]
+            key = time_step[0]
+            med_data = data[key]
+            field_data["med:step_meta"][name].append({
+                "ndt": med_data.attrs.get("NDT", 0),
+                "nor": med_data.attrs.get("NOR", -1),
+                "pdt": med_data.attrs["PDT"],
+                "key": key,
+            })
+        else:
+            names = []
             for i, key in enumerate(time_step):
-                t = data[key].attrs["PDT"]  # current time
-                names[i] = name + f"[{i:d}] - {t:g}"
+                med_data = data[key]
+                t = med_data.attrs["PDT"]
+                field_data["med:step_meta"][name].append({
+                    "ndt": med_data.attrs.get("NDT", i),
+                    "nor": med_data.attrs.get("NOR", -1),
+                    "pdt": t,
+                    "key": key,
+                })
+                names.append(name + f"[{i:d}] - {t:g}")
 
-        # MED field can contain multiple types of data
         for i, key in enumerate(time_step):
-            med_data = data[key]  # at a particular time step
-            name = names[i]
+            med_data = data[key]
+            name_i = names[i]
             for supp in med_data:
-                if supp == "NOE":  # continuous nodal (NOEU) data
-                    point_data[name] = _read_nodal_data(med_data, profiles)
-                else:  # Gauss points (ELGA) or DG (ELNO) data
+                if supp == "NOE":
+                    point_data[name_i] = _read_nodal_data(med_data, profiles)
+                else:
                     cell_type = med_to_meshio_type[supp.partition(".")[2]]
                     assert cell_type in cell_types
                     cell_index = cell_types.index(cell_type)
-                    if name not in cell_data:
-                        cell_data[name] = [None] * len(cell_types)
-                    cell_data[name][cell_index] = _read_cell_data(
+                    if name_i not in cell_data:
+                        cell_data[name_i] = [None] * len(cell_types)
+                    cell_data[name_i][cell_index] = _read_cell_data(
                         med_data[supp], profiles
                     )
-
 
 def _read_nodal_data(med_data, profiles):
     profile = med_data["NOE"].attrs["PFL"]
@@ -472,6 +462,8 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
     fields = f.create_group("CHA")
     field_comp_names = mesh.field_data.get("med:nom", [])
+    step_meta = mesh.field_data.get("med:step_meta", {})      
+    field_units = mesh.field_data.get("med:field_units", {})  
     name_idx = 0
 
     # Nodal data grouped by base field name for multi-timestep support
@@ -489,14 +481,14 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
         first_data = entries[0][2]
         n_components = 1 if first_data.ndim == 1 else first_data.shape[-1]
-
+        units = field_units.get(base_name, (numpy_void_str, numpy_void_str)) 
         try:
             field = fields.create_group(base_name)
             field.attrs.create("MAI", np.bytes_(mesh_name))
             field.attrs.create("TYP", numpy_to_med_type.get(first_data.dtype, MED_FLOAT64))
             field.attrs.create("NCO", n_components)
-            field.attrs.create("UNI", numpy_void_str)
-            field.attrs.create("UNT", numpy_void_str)
+            field.attrs.create("UNI", units[0] if units[0] is not None else numpy_void_str)  
+            field.attrs.create("UNT", units[1] if units[1] is not None else numpy_void_str)  
             nom = (
                 np.bytes_("".join(f"{n:<16}" for n in comp_name))
                 if comp_name
@@ -508,10 +500,12 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
         tracker = FieldBitmaskWriter()
 
+        meta_list = step_meta.get(base_name, [])   # ← nouveau
         for i, (idx, pdt_orig, data) in enumerate(entries):
-            ndt = i + 1
-            nor = -1
-            pdt = pdt_orig if pdt_orig is not None else 0.0
+            meta = meta_list[i] if i < len(meta_list) else {}  # ← nouveau
+            ndt = meta.get("ndt", i + 1)                       # ← réel
+            nor = meta.get("nor", -1)                          # ← réel
+            pdt = meta.get("pdt", pdt_orig if pdt_orig is not None else 0.0)  # ← réel
             step_name = f"{ndt:020d}{nor:020d}"
             if step_name not in field:
                 ts = field.create_group(step_name)
