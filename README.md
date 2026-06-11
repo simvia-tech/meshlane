@@ -1,90 +1,110 @@
+
 <p align="center">
-  <a href="https://github.com/nschloe/meshio"><img alt="meshio" src="https://nschloe.github.io/meshio/logo-with-text.svg" width="60%"></a>
-  <p align="center">I/O for mesh files.</p>
+  <a href="https://github.com/nschloe/meshio"><img alt="meshio" src="https://nschloe.github.io/meshio/logo-with-text.svg" width="55%"></a>
 </p>
 
-[![PyPi Version](https://img.shields.io/pypi/v/meshio.svg?style=flat-square)](https://pypi.org/project/meshio/)
-[![Anaconda Cloud](https://anaconda.org/conda-forge/meshio/badges/version.svg?=style=flat-square)](https://anaconda.org/conda-forge/meshio/)
-[![Packaging status](https://repology.org/badge/tiny-repos/python:meshio.svg)](https://repology.org/project/python:meshio/versions)
-[![PyPI pyversions](https://img.shields.io/pypi/pyversions/meshio.svg?style=flat-square)](https://pypi.org/project/meshio/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1173115.svg?style=flat-square)](https://doi.org/10.5281/zenodo.1173115)
-[![GitHub stars](https://img.shields.io/github/stars/nschloe/meshio.svg?style=flat-square&logo=github&label=Stars&logoColor=white)](https://github.com/nschloe/meshio)
-[![Downloads](https://pepy.tech/badge/meshio/month?style=flat-square)](https://pepy.tech/project/meshio)
+<p align="center"><b>I/O for mesh files.</b></p>
 
-<!--[![PyPi downloads](https://img.shields.io/pypi/dm/meshio.svg?style=flat-square)](https://pypistats.org/packages/meshio)-->
+<p align="center">
+  <a href="https://pypi.org/project/meshio/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/meshio.svg?logo=pypi&logoColor=white"></a>
+  <a href="https://github.com/simvia-tech/meshio/actions"><img alt="CI-CD" src="https://img.shields.io/github/actions/workflow/status/simvia-tech/meshio/ci.yml?logo=github&label=CI-CD"></a>
+  <a href="https://github.com/simvia-tech/meshio/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://anaconda.org/conda-forge/meshio"><img alt="conda-forge" src="https://img.shields.io/conda/vn/conda-forge/meshio?logo=anaconda&logoColor=white"></a>
+</p>
 
-[![Discord](https://img.shields.io/static/v1?logo=discord&logoColor=white&label=chat&message=on%20discord&color=7289da&style=flat-square)](https://discord.gg/Z6DMsJh4Hr)
+# meshio
 
-[![gh-actions](https://img.shields.io/github/workflow/status/nschloe/meshio/ci?style=flat-square)](https://github.com/nschloe/meshio/actions?query=workflow%3Aci)
-[![codecov](https://img.shields.io/codecov/c/github/nschloe/meshio.svg?style=flat-square)](https://app.codecov.io/gh/nschloe/meshio)
-[![LGTM](https://img.shields.io/lgtm/grade/python/github/nschloe/meshio.svg?style=flat-square)](https://lgtm.com/projects/g/nschloe/meshio)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
+**meshio** is a Python library to read and write a wide range of mesh file formats.
+It supports many element types and handles **more than 30 formats** (see the table
+below), making it a convenient interchange tool between simulation and meshing software.
 
-There are various mesh formats available for representing unstructured meshes.
-meshio can read and write all of the following and smoothly converts between them:
+Maintained with ❤️ by [Simvia](https://simvia.tech) as part of our open-source
+simulation toolchain.
 
-> [Abaqus](http://abaqus.software.polimi.it/v6.14/index.html) (`.inp`),
-> ANSYS msh (`.msh`),
-> [AVS-UCD](https://lanl.github.io/LaGriT/pages/docs/read_avs.html) (`.avs`),
-> [CGNS](https://cgns.github.io/) (`.cgns`),
-> [DOLFIN XML](https://manpages.ubuntu.com/manpages/jammy/en/man1/dolfin-convert.1.html) (`.xml`),
-> [Exodus](https://nschloe.github.io/meshio/exodus.pdf) (`.e`, `.exo`),
-> [FLAC3D](https://www.itascacg.com/software/flac3d) (`.f3grid`),
-> [H5M](https://www.mcs.anl.gov/~fathom/moab-docs/h5mmain.html) (`.h5m`),
-> [Kratos/MDPA](https://github.com/KratosMultiphysics/Kratos/wiki/Input-data) (`.mdpa`),
-> [Medit](https://people.sc.fsu.edu/~jburkardt/data/medit/medit.html) (`.mesh`, `.meshb`),
-> [MED/Salome](https://docs.salome-platform.org/latest/dev/MEDCoupling/developer/med-file.html) (`.med`),
-> [Nastran](https://help.autodesk.com/view/NSTRN/2019/ENU/?guid=GUID-42B54ACB-FBE3-47CA-B8FE-475E7AD91A00) (bulk data, `.bdf`, `.fem`, `.nas`),
-> [Netgen](https://github.com/ngsolve/netgen) (`.vol`, `.vol.gz`),
-> [Neuroglancer precomputed format](https://github.com/google/neuroglancer/tree/master/src/neuroglancer/datasource/precomputed#mesh-representation-of-segmented-object-surfaces),
-> [Gmsh](https://gmsh.info/doc/texinfo/gmsh.html#File-formats) (format versions 2.2, 4.0, and 4.1, `.msh`),
-> [OBJ](https://en.wikipedia.org/wiki/Wavefront_.obj_file) (`.obj`),
-> [OFF](https://segeval.cs.princeton.edu/public/off_format.html) (`.off`),
-> [PERMAS](https://www.intes.de) (`.post`, `.post.gz`, `.dato`, `.dato.gz`),
-> [PLY](<https://en.wikipedia.org/wiki/PLY_(file_format)>) (`.ply`),
-> [STL](<https://en.wikipedia.org/wiki/STL_(file_format)>) (`.stl`),
-> [Tecplot .dat](http://paulbourke.net/dataformats/tp/),
-> [TetGen .node/.ele](https://wias-berlin.de/software/tetgen/fformats.html),
-> [SVG](https://www.w3.org/TR/SVG/) (2D output only) (`.svg`),
-> [SU2](https://su2code.github.io/docs_v7/Mesh-File/) (`.su2`),
-> [UGRID](https://www.simcenter.msstate.edu/software/documentation/ug_io/3d_grid_file_type_ugrid.html) (`.ugrid`),
-> [VTK](https://vtk.org/wp-content/uploads/2015/04/file-formats.pdf) (`.vtk`),
-> [VTU](https://vtk.org/Wiki/VTK_XML_Formats) (`.vtu`),
-> [WKT](https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry) ([TIN](https://en.wikipedia.org/wiki/Triangulated_irregular_network)) (`.wkt`),
-> [XDMF](https://xdmf.org/index.php/XDMF_Model_and_Format) (`.xdmf`, `.xmf`).
+## ⚡ Features
 
-([Here's a little survey](https://forms.gle/PSeNb3N3gv3wbEus8) on which formats are actually
-used.)
+- Read **and** write 30+ mesh formats from a single, unified API
+- Rich element-type support (triangles, quads, tets, hexes, and more)
+- In-memory `Mesh` object with `points`, `cells`, `point_data`, `cell_data`, …
+- Time-series support through the XDMF format
+- Command-line tool: `convert`, `info`, `compress`, `binary`/`ascii`
+- ParaView plugin to open any meshio-supported file directly
 
-Install with one of
+### Supported formats
 
-```
+| Format | Extension | Read | Write |
+|--------|-----------|:----:|:-----:|
+| Abaqus | `.inp` | ✅ | ✅ |
+| ANSYS msh | `.msh` | ✅ | ✅ |
+| ANSYS inp | `.inp` | ✅ | ✅ |
+| ANSYS cdb | `.cdb` | ✅ | ✅ |
+| AVS-UCD | `.avs` | ✅ | ✅ |
+| CGNS | `.cgns` | ✅ | ✅ |
+| DOLFIN/FEniCS XML | `.xml` | ✅ | ✅ |
+| Exodus | `.e`, `.exo` | ✅ | ✅ |
+| FLAC3D | `.f3grid` | ✅ | ✅ |
+| Gmsh (v2) | `.msh` | ✅ | ✅ |
+| Gmsh (v4) | `.msh` | ✅ | ✅ |
+| H5M (MOAB) | `.h5m` | ✅ | ✅ |
+| Kratos/MDPA | `.mdpa` | ✅ | ✅ |
+| MED/Salome | `.med` | ✅ | ✅ |
+| Medit | `.mesh`, `.meshb` | ✅ | ✅ |
+| nastran | `.bdf`, `.nas`, `.fem` | ✅ | ✅ |
+| Netgen | `.vol`, `.vol.gz` | ✅ | ✅ |
+| neuroglancer | `.precomputed` | ✅ | ✅ |
+| OBJ | `.obj` | ✅ | ✅ |
+| OFF | `.off` | ✅ | ✅ |
+| OpenFOAM | `.foam` | ✅ | ✅ |
+| PERMAS | `.post`, `.post.gz`, `.dato`, `.dato.gz` | ✅ | ✅ |
+| PLY | `.ply` | ✅ | ✅ |
+| STL | `.stl` | ✅ | ✅ |
+| SU2 | `.su2` | ✅ | ✅ |
+| SVG | `.svg` | ❌ | ✅ |
+| Tecplot | `.dat` | ✅ | ✅ |
+| TetGen | `.node` / `.ele` | ✅ | ✅ |
+| UGRID | `.ugrid` | ✅ | ✅ |
+| VTK (legacy) | `.vtk` | ✅ | ✅ |
+| VTK XML (various) | `.vtu`, `.vts`, `.vtr`, `.vtp`, `.vti` | ✅ | ✅ |
+| XDMF | `.xdmf`, `.xmf` | ✅ | ✅ |
+| WKT CRS | `.wkt` | ✅ | ❌ |
+
+## 🛠 Installation
+
+meshio is [available on PyPI](https://pypi.org/project/meshio/) and
+[conda-forge](https://anaconda.org/conda-forge/meshio):
+
+```sh
 pip install meshio[all]
+# or
 conda install -c conda-forge meshio
 ```
 
-(`[all]` pulls in all optional dependencies. By default, meshio only uses numpy.)
-You can then use the command-line tool
+> `[all]` pulls in all optional dependencies (`netcdf4`, `h5py`, …).
+> By default, meshio only depends on **numpy**.
 
-<!--pytest-codeblocks:skip-->
+### Verify installation
+
+```sh
+meshio --version
+meshio --help
+```
+
+## 🚀 Usage
+
+### Command line
 
 ```sh
 meshio convert    input.msh output.vtk   # convert between two formats
-
 meshio info       input.xdmf             # show some info about the mesh
-
 meshio compress   input.vtu              # compress the mesh file
 meshio decompress input.vtu              # decompress the mesh file
-
 meshio binary     input.msh              # convert to binary format
 meshio ascii      input.msh              # convert to ASCII format
 ```
 
-with any of the supported formats.
+…with any of the supported formats.
 
-In Python, simply do
-
-<!--pytest-codeblocks:skip-->
+### Reading a mesh
 
 ```python
 import meshio
@@ -92,14 +112,13 @@ import meshio
 mesh = meshio.read(
     filename,  # string, os.PathLike, or a buffer/open file
     # file_format="stl",  # optional if filename is a path; inferred from extension
-    # see meshio-convert -h for all possible formats
 )
 # mesh.points, mesh.cells, mesh.cells_dict, ...
 
 # mesh.vtk.read() is also possible
 ```
 
-to read a mesh. To write, do
+### Writing a mesh
 
 ```python
 import meshio
@@ -136,15 +155,12 @@ meshio.write_points_cells("foo.vtk", points, cells)
 ```
 
 For both input and output, you can optionally specify the exact `file_format`
-(in case you would like to enforce ASCII over binary VTK, for example).
+(to enforce ASCII over binary VTK, for example).
 
-#### Time series
+### Time series
 
-The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports
-time series with a shared mesh. You can write times series data using meshio
-with
-
-<!--pytest-codeblocks:skip-->
+The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports time
+series with a shared mesh. Write time-series data with:
 
 ```python
 with meshio.xdmf.TimeSeriesWriter(filename) as writer:
@@ -153,9 +169,7 @@ with meshio.xdmf.TimeSeriesWriter(filename) as writer:
         writer.write_data(t, point_data={"phi": data})
 ```
 
-and read it with
-
-<!--pytest-codeblocks:skip-->
+…and read it back with:
 
 ```python
 with meshio.xdmf.TimeSeriesReader(filename) as reader:
@@ -164,70 +178,60 @@ with meshio.xdmf.TimeSeriesReader(filename) as reader:
         t, point_data, cell_data = reader.read_data(k)
 ```
 
-### ParaView plugin
+## 🔌 ParaView plugin
 
 <img alt="gmsh paraview" src="https://nschloe.github.io/meshio/gmsh-paraview.png" width="60%">
+
 *A Gmsh file opened with ParaView.*
 
-If you have downloaded a binary version of ParaView, you may proceed as follows.
+If you downloaded a binary version of ParaView:
 
-- Install meshio for the Python major version that ParaView uses (check `pvpython --version`)
-- Open ParaView
-- Find the file `paraview-meshio-plugin.py` of your meshio installation (on Linux:
-  `~/.local/share/paraview-5.9/plugins/`) and load it under _Tools / Manage Plugins / Load New_
-- _Optional:_ Activate _Auto Load_
+1. Install meshio for the Python major version ParaView uses (check `pvpython --version`).
+2. Open ParaView.
+3. Load `paraview-meshio-plugin.py` from your meshio installation
+   (Linux: `~/.local/share/paraview-5.9/plugins/`) under
+   *Tools → Manage Plugins → Load New*.
+4. *Optional:* activate **Auto Load**.
 
 You can now open all meshio-supported files in ParaView.
 
-### Performance comparison
+## 📊 Performance
 
-The comparisons here are for a triangular mesh with about 900k points and 1.8M
-triangles. The red lines mark the size of the mesh in memory.
+Benchmarks below use a triangular mesh with ~900k points and ~1.8M triangles.
+Red lines mark the size of the mesh in memory.
 
-#### File sizes
+| File sizes | I/O speed | Max memory |
+|:----------:|:---------:|:----------:|
+| <img alt="file size" src="https://nschloe.github.io/meshio/filesizes.svg" width="100%"> | <img alt="performance" src="https://nschloe.github.io/meshio/performance.svg" width="100%"> | <img alt="memory usage" src="https://nschloe.github.io/meshio/memory.svg" width="100%"> |
 
-<img alt="file size" src="https://nschloe.github.io/meshio/filesizes.svg" width="60%">
+## 🧪 Testing
 
-#### I/O speed
+To run meshio unit tests, check out this repository and run:
 
-<img alt="performance" src="https://nschloe.github.io/meshio/performance.svg" width="90%">
-
-#### Maximum memory usage
-
-<img alt="memory usage" src="https://nschloe.github.io/meshio/memory.svg" width="90%">
-
-### Installation
-
-meshio is [available from the Python Package Index](https://pypi.org/project/meshio/),
-so simply run
-
-```
-pip install meshio
-```
-
-to install.
-
-Additional dependencies (`netcdf4`, `h5py`) are required for some of the output formats
-and can be pulled in by
-
-```
-pip install meshio[all]
-```
-
-You can also install meshio from [Anaconda](https://anaconda.org/conda-forge/meshio):
-
-```
-conda install -c conda-forge meshio
-```
-
-### Testing
-
-To run the meshio unit tests, check out this repository and type
-
-```
+```sh
 tox
 ```
 
-### License
+## 🤝 Contributors
 
-meshio is published under the [MIT license](https://en.wikipedia.org/wiki/MIT_License).
+meshio was created by [Nico Schlömer](https://github.com/nschloe) and is built by
+[many contributors](https://github.com/nschloe/meshio/graphs/contributors).
+This fork is maintained by the **Simvia** team.
+
+## 🔗 See Also
+
+- [meshio (upstream)](https://github.com/nschloe/meshio)
+- [Simvia  open-source simulation software](https://simvia.tech/software)
+- [vs_code_aster repository](https://github.com/simvia-tech/vs-code-aster.git)
+- [Simvia Docker Hub](https://hub.docker.com/r/simvia/code_aster)
+
+## 📄 License
+
+This project is published under the **MIT License**.
+See the [LICENSE](https://en.wikipedia.org/wiki/MIT_License) file for details.
+
+## 💬 Reach Us
+
+We love feedback! Don't hesitate to open a
+[GitHub issue](https://github.com/simvia-tech/meshio/issues/new), or reach out to us
+on our website <https://simvia.tech/fr#contact>.
