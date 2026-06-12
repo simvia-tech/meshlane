@@ -658,3 +658,125 @@ def test_family_with_no_groups_omits_GRO(tmp_path):
         family = f["FAS/mesh/NOEUD/FAM_-42_"]
         assert "GRO" not in family
         assert int(family.attrs["NUM"]) == -42
+
+
+def test_nom_dataset_dtype_is_array_i1_80(tmp_path):
+    """
+    The GRO/NOM dataset must have the dtype H5T_ARRAY{[80] char},
+    i.e. np.dtype(('i1', (80,))).
+    """
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "cylinder.med"
+    filename_out = tmp_path / "input_code_aster.med"
+
+    mesh_out = meshio.med.read(filename)
+    meshio.med.write(filename_out, mesh_out)
+
+    with h5py.File(filename_out, "r") as f:
+        mesh_name = list(f["ENS_MAA"].keys())[0]
+        fas = f["FAS"][mesh_name]
+        for section in ("NOEUD", "ELEME"):
+            if section not in fas:
+                continue
+            for gname, grp in fas[section].items():
+                if "GRO" not in grp:
+                    continue
+                nom_ds = grp["GRO"]["NOM"]
+                assert nom_ds.dtype == np.dtype(("i1", (80,))), (
+                    f"FAS/{section}/{gname}/GRO/NOM : "
+                    f"expected dtype ('i1', (80,)), got {nom_ds.dtype}"
+                )
+
+
+def test_nom_dataset_padded_with_spaces(tmp_path):
+    """
+    The padding of GRO/NOM must be spaces (0x20),
+    not zeros (0x00).
+    """
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "med" / "cylinder.med"
+    filename_out = tmp_path / "input_code_aster.med"
+
+    mesh_out = meshio.med.read(filename)
+    meshio.med.write(filename_out, mesh_out)
+
+    with h5py.File(filename_out, "r") as f:
+        mesh_name = list(f["ENS_MAA"].keys())[0]
+        fas = f["FAS"][mesh_name]
+        for section in ("NOEUD", "ELEME"):
+            if section not in fas:
+                continue
+            for gname, grp in fas[section].items():
+                if "GRO" not in grp:
+                    continue
+                nom_data = grp["GRO"]["NOM"][()]
+                for row in nom_data:
+                    row_bytes = bytes(row)
+                    name_str = row_bytes.decode("latin-1").rstrip()
+                    end_idx = len(name_str)
+                    padding = row_bytes[end_idx:]
+                    assert all(b == ord(" ") for b in padding), (
+                        f"FAS/{section}/{gname}/GRO/NOM : "
+                        f"padding must be spaces (0x20), "
+                        f"found {[hex(b) for b in padding[:5]]}"
+                    )
+
+
+def test_empty_family_has_no_gro(tmp_path):
+    """
+    A family without group names must NOT have
+    a GRO subgroup according to the MED spec.
+    """
+    from meshio._mesh import CellBlock, Mesh
+
+    points = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    cells = [CellBlock("triangle", np.array([[0, 1, 2]]))]
+    mesh = Mesh(
+        points, cells,
+        point_data={"point_tags": np.array([0, 0, 0])},
+    )
+    mesh.point_tags = {-1: []}  # family with no names
+    mesh.cell_tags = {}
+
+    filename = tmp_path / "empty_family.med"
+    meshio.med.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        mesh_name = list(f["ENS_MAA"].keys())[0]
+        fas = f["FAS"][mesh_name]
+        if "NOEUD" in fas:
+            for gname, grp in fas["NOEUD"].items():
+                if grp.attrs.get("NUM", 0) == -1:
+                    assert "GRO" not in grp, (
+                        f"Family '{gname}' without names must not "
+                        f"have a GRO subgroup"
+                    )
+
+
+def test_family_name_too_long_raises_write_error(tmp_path):
+    """
+    A family name > 80 bytes must raise a WriteError.
+    """
+    from meshio._mesh import CellBlock, Mesh
+    from meshio._exceptions import WriteError
+
+    points = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    cells = [CellBlock("triangle", np.array([[0, 1, 2]]))]
+    mesh = Mesh(
+        points, cells,
+        point_data={"point_tags": np.array([-1, -1, -1])},
+    )
+    mesh.point_tags = {-1: ["A" * 81]}  # 81 characters > 80
+    mesh.cell_tags = {}
+
+    filename = tmp_path / "toolong.med"
+    with pytest.raises(WriteError, match="too long"):
+        meshio.med.write(filename, mesh)
