@@ -3,8 +3,6 @@ I/O for MED/Salome, cf.
 <https://docs.salome-platform.org/latest/dev/MEDCoupling/developer/med-file.html>.
 """
 
-from unittest import result
-
 import numpy as np
 
 from ._med41 import FieldBitmaskWriter
