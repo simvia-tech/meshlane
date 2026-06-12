@@ -6,14 +6,6 @@ This module reads AND writes the format by directly parsing MAPDL blocks
 the neutral pivot object meshio.Mesh. NO external dependencies, NO passing
 through another format.
 
-Reference: Ansys Mechanical APDL Programmer's Reference, chap. 3
-"The CDWRITE (CDB) File Format", section 3.2.
-
-Known limitations:
-  - "Degenerate" solid elements (tetra/wedge written as bricks with repeated
-    nodes) not recombined: native elements expected (SOLID285/187...).
-  - The order of midside nodes (quadratic) follows the Ansys = VTK
-    convention for common types.
 """
 import re
 
