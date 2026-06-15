@@ -62,6 +62,7 @@ med_to_geo_type = {
     "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
 }
 
+
 def read(filename):
     import h5py
 
@@ -286,7 +287,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         release = version_parts[2] if len(version_parts) > 2 else 0
     except ValueError:
         major, minor, release = 4, 1, 0
-    f = h5py.File(filename, "w")
+    f = h5py.File(filename, "w", track_order=True)
 
     # MED file format version
     info = f.create_group("INFOS_GENERALES")
