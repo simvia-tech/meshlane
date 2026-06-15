@@ -279,8 +279,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         release = version_parts[2] if len(version_parts) > 2 else 0
     except ValueError:
         major, minor, release = 4, 1, 0
-    f = h5py.File(filename, "w")
-    h5py.get_config().track_order = True
+    f = h5py.File(filename, "w", track_order=True)
 
     # MED file format version
     info = f.create_group("INFOS_GENERALES")
