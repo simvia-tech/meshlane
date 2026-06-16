@@ -2,6 +2,7 @@ from . import (
     _cli,
     abaqus,
     ansys,
+    ansysInp,
     avsucd,
     cgns,
     dolfin,
@@ -46,6 +47,7 @@ from ._mesh import CellBlock, Mesh
 __all__ = [
     "abaqus",
     "ansys",
+    "ansysInp",
     "avsucd",
     "cgns",
     "dolfin",
