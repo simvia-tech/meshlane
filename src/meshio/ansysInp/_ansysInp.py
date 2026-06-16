@@ -195,7 +195,7 @@ def _read_lines(lines):
                     next_1 = lines[i]
                     if not _is_data_line(next_1):
                         break
-                    if next_1.strip().startwith("-1"):
+                    if next_1.strip().startswith("-1"):
                         break
                     nodes += _slice_ints(lines[i], iw)
                     i += 1
@@ -218,7 +218,13 @@ def _read_lines(lines):
             expanded, prev = [], None
             for it in items:
                 if it < 0:
+                    if prev is None:
+                        raise ReadError(
+                            f"Invalid CMBLOCK '{cname}': range marker "
+                            "(negative value) before any base value."
+                        )
                     expanded += list(range(prev + 1, -it + 1))
+                    prev = -it
                 else:
                     expanded.append(it)
                     prev = it

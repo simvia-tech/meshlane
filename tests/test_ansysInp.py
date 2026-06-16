@@ -112,6 +112,81 @@ ETBLOCK_INP = textwrap.dedent("""\
 """)
 
 
+# A 10-node tetra (TET187). Its connectivity does not fit on the EBLOCK
+# first line (which holds at most 8 node IDs after the 11-field header), so
+# parsing exercises the continuation-line path.
+TETRA10_INP = textwrap.dedent("""\
+    /PREP7
+    ET,1,187
+    NBLOCK,6,SOLID,      10,      10
+    (3i9,6e21.13e3)
+            1        0        0 0.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            2        0        0 1.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            3        0        0 0.0000000000000E+000 1.0000000000000E+000 0.0000000000000E+000
+            4        0        0 0.0000000000000E+000 0.0000000000000E+000 1.0000000000000E+000
+            5        0        0 0.5000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            6        0        0 0.5000000000000E+000 0.5000000000000E+000 0.0000000000000E+000
+            7        0        0 0.0000000000000E+000 0.5000000000000E+000 0.0000000000000E+000
+            8        0        0 0.0000000000000E+000 0.0000000000000E+000 0.5000000000000E+000
+            9        0        0 0.5000000000000E+000 0.0000000000000E+000 0.5000000000000E+000
+           10        0        0 0.0000000000000E+000 0.5000000000000E+000 0.5000000000000E+000
+    N,R5.3,LOC,      -1,
+    EBLOCK,19,SOLID,       1,       1
+    (19i9)
+            1        1        1        1        0        0        0        0       10        0        1        1        2        3        4        5        6        7        8
+            9       10
+           -1
+    FINISH
+""")
+
+# CMBLOCK whose first item is a negative range marker (no preceding base
+# value). Such a file is malformed and must raise a clean ReadError.
+BAD_CMBLOCK_INP = textwrap.dedent("""\
+    /PREP7
+    ET,1,285
+    NBLOCK,6,SOLID,4,4
+    (3i9,6e21.13e3)
+            1        0        0 0.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            2        0        0 1.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            3        0        0 0.0000000000000E+000 1.0000000000000E+000 0.0000000000000E+000
+            4        0        0 0.0000000000000E+000 0.0000000000000E+000 1.0000000000000E+000
+    N,R5.3,LOC,      -1,
+    EBLOCK,19,SOLID,1,1
+    (19i9)
+            1        1        1        1        0        0        0        0        4        0        1        1        2        3        4
+           -1
+    CMBLOCK,BAD,NODE,1
+    (8i10)
+            -4
+    FINISH
+""")
+
+# CMBLOCK with two consecutive ranges: 1..4 then 6..8.
+MULTI_RANGE_CMBLOCK_INP = textwrap.dedent("""\
+    /PREP7
+    ET,1,285
+    NBLOCK,6,SOLID,8,8
+    (3i9,6e21.13e3)
+            1        0        0 0.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            2        0        0 1.0000000000000E+000 0.0000000000000E+000 0.0000000000000E+000
+            3        0        0 0.0000000000000E+000 1.0000000000000E+000 0.0000000000000E+000
+            4        0        0 0.0000000000000E+000 0.0000000000000E+000 1.0000000000000E+000
+            5        0        0 1.0000000000000E+000 1.0000000000000E+000 0.0000000000000E+000
+            6        0        0 1.0000000000000E+000 0.0000000000000E+000 1.0000000000000E+000
+            7        0        0 0.0000000000000E+000 1.0000000000000E+000 1.0000000000000E+000
+            8        0        0 1.0000000000000E+000 1.0000000000000E+000 1.0000000000000E+000
+    N,R5.3,LOC,      -1,
+    EBLOCK,19,SOLID,1,1
+    (19i9)
+            1        1        1        1        0        0        0        0        4        0        1        1        2        3        4
+           -1
+    CMBLOCK,TWO_RANGES,NODE,        6
+    (8i10)
+             1        -4         6        -8
+    FINISH
+""")
+
+
 def _make_tetra_mesh() -> Mesh:
     points = np.array([
         [0.0, 0.0, 0.0],
@@ -342,3 +417,43 @@ class TestRoundtrip:
     def test_cell_set_names_preserved(self):
         orig, rt = self._roundtrip(CUBE_TETRA_INP)
         assert set(orig.cell_sets.keys()) == set(rt.cell_sets.keys())
+
+
+# Tests: higher-order elements (connectivity spans EBLOCK continuation lines)
+
+class TestHigherOrderElements:
+
+    def test_tetra10_reads_without_crash(self):
+        """A 10-node tetra needs a continuation line in EBLOCK; the reader
+        must parse it instead of crashing on the continuation path.
+        """
+        mesh = _read_from_str(TETRA10_INP)
+        assert len(mesh.cells) == 1
+        assert mesh.cells[0].type == "tetra10"
+
+    def test_tetra10_node_count(self):
+        mesh = _read_from_str(TETRA10_INP)
+        assert mesh.cells[0].data.shape == (1, 10)
+
+    def test_tetra10_points(self):
+        mesh = _read_from_str(TETRA10_INP)
+        assert len(mesh.points) == 10
+
+
+# Tests: CMBLOCK component decoding edge cases
+
+class TestCMBlockEdgeCases:
+
+    def test_multi_range_expands_correctly(self):
+        """Two consecutive ranges (1..4 and 6..8) must both expand."""
+        mesh = _read_from_str(MULTI_RANGE_CMBLOCK_INP)
+        # 1-based node IDs 1,2,3,4,6,7,8 -> 0-based indices 0,1,2,3,5,6,7
+        assert sorted(mesh.point_sets["TWO_RANGES"].tolist()) == [0, 1, 2, 3, 5, 6, 7]
+
+    def test_leading_negative_raises_readerror(self):
+        """A CMBLOCK whose first item is a range marker (negative) must raise
+        a clean ReadError instead of a TypeError.
+        """
+        from meshio._exceptions import ReadError
+        with pytest.raises(ReadError, match="range marker"):
+            _read_from_str(BAD_CMBLOCK_INP)
