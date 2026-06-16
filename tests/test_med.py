@@ -1140,3 +1140,23 @@ def test_step_metadata_roundtrip(tmp_path):
             assert ts.attrs["PDT"] == pytest.approx(3.14), (
                 "PDT must be preserved after round-trip"
             )
+
+
+def test_metadata_latin1_roundtrip(tmp_path):
+    """Non-ASCII Latin-1 metadata (µm, °C, French accents) must round-trip.
+    MED stores strings as 8-bit char arrays, so Latin-1 is the supported
+    encoding. Plain ASCII and Latin-1 supplements must both be preserved
+    without UnicodeEncodeError on write.
+    """
+    filename = tmp_path / "latin1.med"
+    mesh = copy.deepcopy(helpers.tri_mesh)
+    mesh.unit_coords = "µm"
+    mesh.unit_time = "µs"
+    mesh.description = "Maillage généré par Salome"
+
+    meshio.med.write(filename, mesh)
+    out = meshio.med.read(filename)
+
+    assert out.unit_coords == "µm"
+    assert out.unit_time == "µs"
+    assert out.description == "Maillage généré par Salome"
