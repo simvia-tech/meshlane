@@ -86,6 +86,37 @@ def _parse_med_field_name(name):
             pass
     return name, None, None
 
+
+def _write_field_step(
+    field_grp, step_name, ndt, nor, pdt, supp, data,
+    med_type=None, profile="MED_NO_PROFILE_INTERNAL",
+):
+    """Write a single time step into a MED field group."""
+    if step_name not in field_grp:
+        ts = field_grp.create_group(step_name)
+        ts.attrs.create("NDT", ndt)
+        ts.attrs.create("NOR", nor)
+        ts.attrs.create("PDT", pdt)
+        ts.attrs.create("RDT", -1)
+        ts.attrs.create("ROR", -1)
+    else:
+        ts = field_grp[step_name]
+
+    if supp == "NOEU":
+        typ = ts.create_group("NOE")
+    elif supp == "ELNO":
+        typ = ts.create_group("NOE." + med_type)
+    else:
+        typ = ts.create_group("MAI." + med_type)
+
+    typ.attrs.create("GAU", numpy_void_str)
+    typ.attrs.create("PFL", np.bytes_(profile))
+    profile_grp = typ.create_group(profile)
+    profile_grp.attrs.create("NBR", len(data))
+    profile_grp.attrs.create("NGA", data.shape[1] if supp == "ELNO" else 1)
+    profile_grp.attrs.create("GAU", numpy_void_str)
+    profile_grp.create_dataset("CO", data=data.flatten(order="F"))
+
 def read(filename):
     import h5py
 

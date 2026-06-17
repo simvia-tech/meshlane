@@ -1160,3 +1160,201 @@ def test_metadata_latin1_roundtrip(tmp_path):
     assert out.unit_coords == "µm"
     assert out.unit_time == "µs"
     assert out.description == "Maillage généré par Salome"
+
+
+def test_med_multi_write_read_two_meshes(tmp_path):
+    """
+    write_med_multi must write two meshes and read_med_multi must
+    return them with the correct number of points and cells.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    mesh1 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+    )
+    mesh2 = Mesh(
+        np.array([
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0], [1.0, 1.0, 0.0],
+        ]),
+        [CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2]]))],
+    )
+
+    filename = tmp_path / "two_meshes.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["mesh_a", "mesh_b"])
+
+    meshes, names = meshio.med.read_med_multi(filename)
+
+    assert names == ["mesh_a", "mesh_b"], (
+        f"Mesh names must be preserved, got {names}"
+    )
+    assert len(meshes[0].points) == 3, (
+        "mesh_a must have 3 points"
+    )
+    assert len(meshes[1].points) == 4, (
+        "mesh_b must have 4 points"
+    )
+    assert len(meshes[0].cells[0].data) == 1, (
+        "mesh_a must have 1 triangle"
+    )
+    assert len(meshes[1].cells[0].data) == 2, (
+        "mesh_b must have 2 triangles"
+    )
+
+
+def test_med_multi_default_mesh_names(tmp_path):
+    """
+    Without explicit mesh_names, meshes must be named mesh_0, mesh_1, etc.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    mesh1 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+    )
+    mesh2 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+    )
+
+    filename = tmp_path / "default_names.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2])
+
+    meshes, names = meshio.med.read_med_multi(filename)
+    assert "mesh_0" in names, f"Default name 'mesh_0' expected, got {names}"
+    assert "mesh_1" in names, f"Default name 'mesh_1' expected, got {names}"
+
+
+def test_med_multi_field_collision_disambiguated(tmp_path):
+    """
+    When two meshes have a field with the same name, the HDF5 group
+    must be disambiguated with @<mesh_name> suffix.
+    On read-back, the field name must be the original (without @).
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    mesh1 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+        point_data={"pressure": np.array([1.0, 2.0, 3.0])},
+    )
+    mesh2 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+        point_data={"pressure": np.array([4.0, 5.0, 6.0])},
+    )
+
+    filename = tmp_path / "collision.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+
+    # HDF5 must use @suffix for collision
+    with h5py.File(filename, "r") as f:
+        cha_keys = list(f["CHA"].keys())
+        assert "pressure" in cha_keys or "pressure@m1" in cha_keys, (
+            f"Expected 'pressure' or 'pressure@m1' in CHA, got {cha_keys}"
+        )
+        assert "pressure@m2" in cha_keys, (
+            f"Expected 'pressure@m2' in CHA, got {cha_keys}"
+        )
+
+    # Read-back must restore original field name without @
+    meshes, names = meshio.med.read_med_multi(filename)
+    assert "pressure" in meshes[0].point_data, (
+        "Field 'pressure' must be restored without @ suffix on read"
+    )
+    assert "pressure" in meshes[1].point_data, (
+        "Field 'pressure' must be restored without @ suffix on read"
+    )
+    assert not any("@" in k for k in meshes[0].point_data), (
+        "No @ suffix must appear in point_data keys after read"
+    )
+    assert not any("@" in k for k in meshes[1].point_data), (
+        "No @ suffix must appear in point_data keys after read"
+    )
+
+
+def test_med_multi_no_field_collision(tmp_path):
+    """
+    When two meshes have different field names, no @ suffix must be used.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    mesh1 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+        point_data={"temperature": np.array([1.0, 2.0, 3.0])},
+    )
+    mesh2 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+        point_data={"pressure": np.array([4.0, 5.0, 6.0])},
+    )
+
+    filename = tmp_path / "no_collision.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+
+    with h5py.File(filename, "r") as f:
+        cha_keys = list(f["CHA"].keys())
+        assert "temperature" in cha_keys, (
+            "Field 'temperature' must not be renamed when no collision"
+        )
+        assert "pressure" in cha_keys, (
+            "Field 'pressure' must not be renamed when no collision"
+        )
+        assert not any("@" in k for k in cha_keys), (
+            f"No @ suffix expected when no collision, got {cha_keys}"
+        )
+
+
+def test_med_multi_points_preserved(tmp_path):
+    """
+    Point coordinates must be exactly preserved after a write/read round-trip.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    pts1 = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    pts2 = np.array([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]])
+
+    mesh1 = Mesh(pts1, [CellBlock("triangle", np.array([[0, 1, 2]]))])
+    mesh2 = Mesh(pts2, [CellBlock("triangle", np.array([[0, 1, 2]]))])
+
+    filename = tmp_path / "points.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+
+    meshes, _ = meshio.med.read_med_multi(filename)
+    assert np.allclose(meshes[0].points, pts1), (
+        "Points of mesh1 must be preserved after round-trip"
+    )
+    assert np.allclose(meshes[1].points, pts2), (
+        "Points of mesh2 must be preserved after round-trip"
+    )
+
+
+def test_med_multi_hdf5_structure(tmp_path):
+    """
+    The HDF5 file must contain ENS_MAA with all mesh names
+    and FAS with one group per mesh.
+    """
+    from meshio._mesh import Mesh, CellBlock
+
+    mesh1 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+    )
+    mesh2 = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2]]))],
+    )
+
+    filename = tmp_path / "structure.med"
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["alpha", "beta"])
+
+    with h5py.File(filename, "r") as f:
+        assert "ENS_MAA" in f, "ENS_MAA must exist"
+        assert "alpha" in f["ENS_MAA"], "alpha must be in ENS_MAA"
+        assert "beta" in f["ENS_MAA"], "beta must be in ENS_MAA"
+        assert "FAS" in f, "FAS must exist"
+        assert "alpha" in f["FAS"], "alpha must be in FAS"
+        assert "beta" in f["FAS"], "beta must be in FAS"
+        assert "INFOS_GENERALES" in f, "INFOS_GENERALES must exist"
