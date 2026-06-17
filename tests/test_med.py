@@ -1167,7 +1167,6 @@ def test_med_multi_write_read_two_meshes(tmp_path):
     write_med_multi must write two meshes and read_med_multi must
     return them with the correct number of points and cells.
     """
-    from meshio.med._medmulti import write_med_multi, read_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     mesh1 = Mesh(
@@ -1183,9 +1182,9 @@ def test_med_multi_write_read_two_meshes(tmp_path):
     )
 
     filename = tmp_path / "two_meshes.med"
-    write_med_multi(filename, [mesh1, mesh2], mesh_names=["mesh_a", "mesh_b"])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["mesh_a", "mesh_b"])
 
-    meshes, names = read_med_multi(filename)
+    meshes, names = meshio.med.read_med_multi(filename)
 
     assert names == ["mesh_a", "mesh_b"], (
         f"Mesh names must be preserved, got {names}"
@@ -1208,7 +1207,6 @@ def test_med_multi_default_mesh_names(tmp_path):
     """
     Without explicit mesh_names, meshes must be named mesh_0, mesh_1, etc.
     """
-    from meshio.med._medmulti import write_med_multi, read_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     mesh1 = Mesh(
@@ -1221,9 +1219,9 @@ def test_med_multi_default_mesh_names(tmp_path):
     )
 
     filename = tmp_path / "default_names.med"
-    write_med_multi(filename, [mesh1, mesh2])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2])
 
-    meshes, names = read_med_multi(filename)
+    meshes, names = meshio.med.read_med_multi(filename)
     assert "mesh_0" in names, f"Default name 'mesh_0' expected, got {names}"
     assert "mesh_1" in names, f"Default name 'mesh_1' expected, got {names}"
 
@@ -1234,7 +1232,6 @@ def test_med_multi_field_collision_disambiguated(tmp_path):
     must be disambiguated with @<mesh_name> suffix.
     On read-back, the field name must be the original (without @).
     """
-    from meshio.med._medmulti import write_med_multi, read_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     mesh1 = Mesh(
@@ -1249,7 +1246,7 @@ def test_med_multi_field_collision_disambiguated(tmp_path):
     )
 
     filename = tmp_path / "collision.med"
-    write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
 
     # HDF5 must use @suffix for collision
     with h5py.File(filename, "r") as f:
@@ -1262,7 +1259,7 @@ def test_med_multi_field_collision_disambiguated(tmp_path):
         )
 
     # Read-back must restore original field name without @
-    meshes, names = read_med_multi(filename)
+    meshes, names = meshio.med.read_med_multi(filename)
     assert "pressure" in meshes[0].point_data, (
         "Field 'pressure' must be restored without @ suffix on read"
     )
@@ -1281,7 +1278,6 @@ def test_med_multi_no_field_collision(tmp_path):
     """
     When two meshes have different field names, no @ suffix must be used.
     """
-    from meshio.med._medmulti import write_med_multi, read_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     mesh1 = Mesh(
@@ -1296,7 +1292,7 @@ def test_med_multi_no_field_collision(tmp_path):
     )
 
     filename = tmp_path / "no_collision.med"
-    write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
 
     with h5py.File(filename, "r") as f:
         cha_keys = list(f["CHA"].keys())
@@ -1315,7 +1311,6 @@ def test_med_multi_points_preserved(tmp_path):
     """
     Point coordinates must be exactly preserved after a write/read round-trip.
     """
-    from meshio.med._medmulti import write_med_multi, read_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     pts1 = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -1325,9 +1320,9 @@ def test_med_multi_points_preserved(tmp_path):
     mesh2 = Mesh(pts2, [CellBlock("triangle", np.array([[0, 1, 2]]))])
 
     filename = tmp_path / "points.med"
-    write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["m1", "m2"])
 
-    meshes, _ = read_med_multi(filename)
+    meshes, _ = meshio.med.read_med_multi(filename)
     assert np.allclose(meshes[0].points, pts1), (
         "Points of mesh1 must be preserved after round-trip"
     )
@@ -1341,7 +1336,6 @@ def test_med_multi_hdf5_structure(tmp_path):
     The HDF5 file must contain ENS_MAA with all mesh names
     and FAS with one group per mesh.
     """
-    from meshio.med._medmulti import write_med_multi
     from meshio._mesh import Mesh, CellBlock
 
     mesh1 = Mesh(
@@ -1354,7 +1348,7 @@ def test_med_multi_hdf5_structure(tmp_path):
     )
 
     filename = tmp_path / "structure.med"
-    write_med_multi(filename, [mesh1, mesh2], mesh_names=["alpha", "beta"])
+    meshio.med.write_med_multi(filename, [mesh1, mesh2], mesh_names=["alpha", "beta"])
 
     with h5py.File(filename, "r") as f:
         assert "ENS_MAA" in f, "ENS_MAA must exist"

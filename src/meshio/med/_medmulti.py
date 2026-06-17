@@ -54,8 +54,7 @@ def _resolve_mesh_names(meshes, mesh_names=None):
 
     if len(mesh_names) > len(meshes):
         raise WriteError(
-            f"Plus de noms de maillage ({len(mesh_names)}) "
-            f"que de maillages ({len(meshes)})"
+            f"More mesh names ({len(mesh_names)}) than meshes ({len(meshes)})."
         )
 
     # de-duplicate
@@ -102,12 +101,15 @@ def _find_field_collisions(meshes):
 
 
 def _bytes_attr(value, fallback=numpy_void_str):
-    """Encode a python str / bytes into a MED-friendly fixed string attr."""
+    """Encode a python str / bytes into a MED-friendly fixed string attr.
+
+    MED stores strings as 8-bit char arrays, so non-ASCII text is Latin-1 encoded.
+    """
     if value is None or value == "":
         return fallback
     if isinstance(value, (bytes, np.bytes_)):
         return np.bytes_(value)
-    return np.bytes_(str(value))
+    return np.bytes_(str(value).encode("latin-1"))
 
 
 def _create_field_group(fields, hdf5_name, mesh_name, first_data,
@@ -138,7 +140,7 @@ def _write_mesh_fields(fields, mesh, mesh_name, collisions):
     field_units = mesh.field_data.get("med:field_units", {})
     name_idx = 0
 
-    #  Nodal fields, grouped by base name (multi-timestep) 
+    #  Nodal fields, grouped by base name (multi-timestep)
     nodal_groups = defaultdict(list)
     for name, data in mesh.point_data.items():
         if name == "point_tags":
@@ -174,7 +176,7 @@ def _write_mesh_fields(fields, mesh, mesh_name, collisions):
             tracker.notify("MED_NODE", "MED_NO_GEOTYPE", step_name)
         tracker.flush(field)
 
-    #  Cell fields, grouped by base name (multi-timestep) 
+    #  Cell fields, grouped by base name (multi-timestep)
     cell_groups = defaultdict(list)
     for name, d in mesh.cell_data.items():
         if name in ("cell_tags", "gmsh:physical"):
@@ -236,9 +238,9 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
     import h5py
 
     if meshes is None or len(meshes) == 0:
-        raise WriteError("Aucun maillage à écrire.")
+        raise WriteError("No mesh to write.")
     if not isinstance(meshes, list):
-        raise WriteError("Les maillages doivent être fournis sous forme de liste.")
+        raise WriteError("Meshes must be provided as a list.")
 
     try:
         version_parts = [int(x) for x in med_version.split(".")]
@@ -258,7 +260,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
     info.attrs.create("MIN", minor)
     info.attrs.create("REL", rel)
 
-    # Meshes 
+    # Meshes
     mesh_ensemble = f.create_group("ENS_MAA")
     for mesh, name in zip(meshes, mesh_names):
         med_mesh = mesh_ensemble.create_group(name)
@@ -274,7 +276,13 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
         med_mesh.attrs.create(
             "NOM", np.bytes_("".join(f"{n:<16}" for n in axis_names))
         )
-        med_mesh.attrs.create("DES", np.bytes_("Mesh created with meshio"))
+        med_mesh.attrs.create(
+            "DES",
+            _bytes_attr(
+                getattr(mesh, "description", ""),
+                fallback=np.bytes_("Mesh created with meshio"),
+            ),
+        )
         med_mesh.attrs.create("TYP", 0)
 
         step = "-0000000000000000001-0000000000000000001"  # NDT NOR
@@ -347,7 +355,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
                 fam.attrs.create("CGT", 1)
                 fam.attrs.create("NBR", n_merged)
 
-    # Families (FAS) 
+    # Families (FAS)
     fas = f.create_group("FAS")
     for mesh, name in zip(meshes, mesh_names):
         families = fas.create_group(name)
@@ -372,7 +380,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
         except AttributeError:
             pass
 
-    # Fields (CHA) 
+    # Fields (CHA)
     any_fields = any(
         any(k != "point_tags" for k in mesh.point_data)
         or any(k not in ("cell_tags", "gmsh:physical") for k in mesh.cell_data)
@@ -409,9 +417,9 @@ def read_med_multi(filename, **kwargs):
     """Read a multi-mesh MED file. Returns (meshes, mesh_names)."""
     import h5py
 
-    f = h5py.File(filename, "r")
-    mesh_names = list(f["ENS_MAA"].keys())
-    meshes = [_read_single_mesh(f, name) for name in mesh_names]
+    with h5py.File(filename, "r") as f:
+        mesh_names = list(f["ENS_MAA"].keys())
+        meshes = [_read_single_mesh(f, name) for name in mesh_names]
     return meshes, mesh_names
 
 
@@ -420,9 +428,9 @@ def _read_single_mesh(f, name):
     dim = mesh_grp.attrs["ESP"]
 
     # metadata read from the top mesh group (before descending into a step)
-    description = mesh_grp.attrs.get("DES", b"").decode().strip().rstrip("\x00")
-    unit_time = mesh_grp.attrs.get("UNT", b"").decode().strip().rstrip("\x00")
-    unit_coords = mesh_grp.attrs.get("UNI", b"").decode().strip().rstrip("\x00")
+    description = mesh_grp.attrs.get("DES", b"").decode("latin-1").strip().rstrip("\x00")
+    unit_time = mesh_grp.attrs.get("UNT", b"").decode("latin-1").strip().rstrip("\x00")
+    unit_coords = mesh_grp.attrs.get("UNI", b"").decode("latin-1").strip().rstrip("\x00")
 
     if "NOE" not in mesh_grp:
         time_step = list(mesh_grp.keys())
