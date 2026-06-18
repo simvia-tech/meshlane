@@ -58,6 +58,8 @@ and writes all of the following and converts smoothly between them:
 
 > **Note:** meshlane is not yet published on PyPI. Until then, install from source:
 
+<!--pytest-codeblocks:skip-->
+
 ```sh
 git clone https://github.com/simvia-tech/meshlane.git
 cd meshlane
@@ -71,6 +73,8 @@ CGNS, H5M, MED and XDMF formats. By default only numpy is needed.)
 
 Command line:
 
+<!--pytest-codeblocks:skip-->
+
 ```sh
 meshlane convert    input.msh output.vtk   # convert between two formats
 meshlane info       input.xdmf             # show some info about the mesh
@@ -81,6 +85,8 @@ meshlane ascii      input.msh              # convert to ASCII format
 ```
 
 In Python, read a mesh:
+
+<!--pytest-codeblocks:skip-->
 
 ```python
 import meshlane
@@ -126,12 +132,16 @@ ASCII over binary VTK).
 The [XDMF format](https://xdmf.org/index.php/XDMF_Model_and_Format) supports time
 series sharing one mesh:
 
+<!--pytest-codeblocks:skip-->
+
 ```python
 with meshlane.xdmf.TimeSeriesWriter(filename) as writer:
     writer.write_points_cells(points, cells)
     for t in [0.0, 0.1, 0.21]:
         writer.write_data(t, point_data={"phi": data})
 ```
+
+<!--pytest-codeblocks:skip-->
 
 ```python
 with meshlane.xdmf.TimeSeriesReader(filename) as reader:
@@ -141,6 +151,8 @@ with meshlane.xdmf.TimeSeriesReader(filename) as reader:
 ```
 
 ## Testing
+
+<!--pytest-codeblocks:skip-->
 
 ```sh
 tox
