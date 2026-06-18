@@ -18,8 +18,9 @@ keywords = [
   "finite elements"
 ]
 authors = [
-  {email = "nico.schloemer@gmail.com"},
-  {name = "Nico Schlömer"}
+  {name = "Mariam Kesba", email = "mariam.kesba@simvia.tech"},
+  {name = "Fatima-Zahra Noussi", email = "fatima-zahra.noussi@simvia.tech"},
+  {name = "Lucas Sovre", email = "lucas.sovre@simvia.tech"},
 ]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
