@@ -85,7 +85,7 @@ def _find_n_and_data_start(
 
         line = raw[pos:nl].decode("ascii", errors="replace").strip()
 
-        # Phase 1: consume the header 
+        # Phase 1: consume the header
         if not header_done:
             if "FoamFile" in line:
                 in_foam = True
@@ -96,7 +96,7 @@ def _find_n_and_data_start(
             pos = nl + 1
             continue
 
-        # Phase 2: after the header 
+        # Phase 2: after the header
         # Skip empty lines and comments
         if not line or line.startswith("//") or line.startswith("/*"):
             pos = nl + 1

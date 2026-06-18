@@ -971,6 +971,39 @@ class TestReadFull:
             assert len(mesh.cell_data["cell_tags"]) == len(mesh.cells)
 
 
+class TestPublicAPI:
+    """The format must be reachable through the public ``meshio.read`` entry
+    point. This is checked in a clean subprocess (only ``import meshio``) so it
+    exercises the package __init__ registration, not the direct
+    ``meshio.openfoam._openfoam`` import used elsewhere in this file.
+    """
+
+    def test_meshio_read_foam(self, case_dir):
+        import subprocess
+        import sys
+
+        foam = case_dir / "case.foam"
+        code = (
+            "import meshio;"
+            f"m = meshio.read(r'{foam}');"
+            "assert len(m.points) == 8, m.points.shape;"
+            "assert any(cb.type == 'hexahedron' for cb in m.cells)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"meshio.read('*.foam') failed via public API:\n{result.stderr}"
+        )
+
+    def test_openfoam_read_exposed(self):
+        """meshio.openfoam.read must exist (package __init__ ran)."""
+        import meshio
+        assert hasattr(meshio.openfoam, "read")
+
+
 class TestReadTwoCellMesh:
     """Two hexahedral cells sharing one internal face."""
 
