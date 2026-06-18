@@ -31,6 +31,7 @@ from . import (
     vtu,
     wkt,
     xdmf,
+    openfoam,
 )
 from .__about__ import __version__
 from ._exceptions import ReadError, WriteError
@@ -76,6 +77,7 @@ __all__ = [
     "vtu",
     "wkt",
     "xdmf",
+    "openfoam",
     "_cli",
     "read",
     "write",
