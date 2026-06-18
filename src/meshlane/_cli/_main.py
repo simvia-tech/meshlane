@@ -57,6 +57,7 @@ def _get_version_text():
     return "\n".join(
         [
             f"meshlane {__version__} [Python {python_version}]",
-            "Copyright (c) 2015-2021 Nico Schlömer et al.",
+            "Copyright (c) 2015-2021 Nico Schlömer et al. (meshio)",
+            "Copyright (c) 2026 Simvia and the meshlane contributors",
         ]
     )

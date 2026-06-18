@@ -3,7 +3,21 @@
 
 This document only describes _breaking_ changes in meshio. If you are interested in bug
 fixes, enhancements etc., best follow [the meshio project on
-GitHub](https://github.com/nschloe/meshio).
+GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
+top; the meshio history follows below.
+
+## meshlane 5.4.0
+
+meshlane is a fork of meshio, maintained by Simvia. Breaking changes relative to the
+meshio base it forked from:
+
+- The Python package and import name is now `meshlane` (was `meshio`), and the
+  command-line tool is `meshlane` (was `meshio`).
+- `numpy` is temporarily pinned to `<2` pending a numpy 2.x migration.
+
+Fork additions carried over (non-breaking): OpenFOAM polyMesh reader, Ansys/APDL `.inp`
+reader, and MED/Salome improvements (multi-mesh, polygon support, more robust
+Code_Aster round-trips).
 
 ## v5.1.0 (Dec 11, 2021)
 
