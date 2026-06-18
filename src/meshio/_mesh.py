@@ -98,6 +98,17 @@ class CellBlock:
             self.dim = 3
         elif cell_type.startswith("polygon"):
             self.dim = 2
+            # Store as an ndarray when every polygon in the block has the same
+            # vertex count (uniform). Keep a Python list only for ragged blocks
+            # (e.g. MED Voronoi meshes mixing 4-7 gons), which cannot fit a
+            # rectangular array. This keeps the common uniform case compatible
+            # with writers that expect ndarray data (vtu/vtk/gmsh/...).
+            try:
+                arr = np.asarray(self.data)
+            except ValueError:
+                arr = None
+            if arr is not None and arr.ndim == 2:
+                self.data = arr
         else:
             self.data = np.asarray(self.data)
             self.dim = topological_dimension[cell_type]
