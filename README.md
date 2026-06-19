@@ -1,5 +1,7 @@
 <h1 align="center">meshlane</h1>
 
+<p align="center"><img src="logo/meshlane.svg" width="400" style="max-width: 100%;" /></p>
+
 <p align="center">I/O for mesh files: convert smoothly between many formats.</p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE.txt)
