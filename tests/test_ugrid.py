@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -38,7 +38,7 @@ this_dir = pathlib.Path(__file__).resolve().parent
 )
 def test_io(mesh, accuracy, ext, tmp_path):
     helpers.write_read(
-        tmp_path, meshio.ugrid.write, meshio.ugrid.read, mesh, accuracy, ext
+        tmp_path, meshlane.ugrid.write, meshlane.ugrid.read, mesh, accuracy, ext
     )
 
 
@@ -78,7 +78,7 @@ def test_reference_file(
 ):
     filename = this_dir / "meshes" / "ugrid" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert mesh.points.shape[0] == ref_num_points
     assert mesh.points.shape[1] == 3
 
@@ -181,7 +181,7 @@ def _pyramid_volume(cell):
 def test_volume(filename, volume, accuracy):
     filename = this_dir / "meshes" / "ugrid" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
 
     assert mesh.cells[0].type == "pyramid"
     assert mesh.cells[0].data.shape == (6, 5)
@@ -219,7 +219,7 @@ def _quad_area(cell):
 def test_area(filename, area_tria_ref, area_quad_ref, accuracy):
     filename = this_dir / "meshes" / "ugrid" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     ugrid_meshio_id = {
         "triangle": None,
         "quad": None,

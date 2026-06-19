@@ -4,7 +4,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -23,7 +23,7 @@ from . import helpers
 )
 def test(mesh, tmp_path):
     helpers.write_read(
-        tmp_path, meshio.tecplot.write, meshio.tecplot.read, mesh, 1.0e-15
+        tmp_path, meshlane.tecplot.write, meshlane.tecplot.read, mesh, 1.0e-15
     )
 
 
@@ -33,18 +33,18 @@ def test(mesh, tmp_path):
 def test_comma_space(filename, tmp_path):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "tecplot" / filename
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
 
     helpers.write_read(
-        tmp_path, meshio.tecplot.write, meshio.tecplot.read, mesh, 1.0e-15
+        tmp_path, meshlane.tecplot.write, meshlane.tecplot.read, mesh, 1.0e-15
     )
 
 
 def test_varlocation(tmp_path):
     # Test that VARLOCATION is correctly written and read depending on the
     # number of point and cell data.
-    writer = meshio.tecplot.write
-    reader = meshio.tecplot.read
+    writer = meshlane.tecplot.write
+    reader = meshlane.tecplot.read
     mesh = deepcopy(helpers.tri_mesh)
     num_points = len(mesh.points)
     num_cells = sum(len(c.data) for c in mesh.cells)

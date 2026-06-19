@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -47,12 +47,12 @@ def test(mesh, data_type, tmp_path):
     binary, compression = data_type
 
     def writer(*args, **kwargs):
-        return meshio.vtu.write(*args, binary=binary, compression=compression, **kwargs)
+        return meshlane.vtu.write(*args, binary=binary, compression=compression, **kwargs)
 
     # ASCII files are only meant for debugging, VTK stores only 11 digits
     # <https://gitlab.kitware.com/vtk/vtk/-/issues/17038#note_264052>
     tol = 1.0e-15 if binary else 1.0e-10
-    helpers.write_read(tmp_path, writer, meshio.vtu.read, mesh, tol)
+    helpers.write_read(tmp_path, writer, meshlane.vtu.read, mesh, tol)
 
 
 def test_generic_io(tmp_path):
@@ -73,7 +73,7 @@ def test_read_from_file(filename, ref_cells, ref_num_cells, ref_num_pnt):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "vtu" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert len(mesh.cells) == 1
     assert ref_cells == mesh.cells[0].type
     assert len(mesh.cells[0].data) == ref_num_cells

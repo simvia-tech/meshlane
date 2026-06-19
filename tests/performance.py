@@ -9,16 +9,16 @@ import matplotlib.pyplot as plt
 import meshzoo
 import numpy as np
 
-import meshio
+import meshlane
 
 
 def generate_triangular_mesh():
     p = pathlib.Path("sphere.xdmf")
     if pathlib.Path.is_file(p):
-        mesh = meshio.read(p)
+        mesh = meshlane.read(p)
     else:
         points, cells = meshzoo.icosa_sphere(300)
-        mesh = meshio.Mesh(points, {"triangle": cells})
+        mesh = meshlane.Mesh(points, {"triangle": cells})
         mesh.write(p)
     return mesh
 
@@ -26,7 +26,7 @@ def generate_triangular_mesh():
 def generate_tetrahedral_mesh():
     """Generates a fairly large mesh."""
     if pathlib.Path.is_file("cache.xdmf"):
-        mesh = meshio.read("cache.xdmf")
+        mesh = meshlane.read("cache.xdmf")
     else:
         import pygalmesh
 
@@ -148,111 +148,111 @@ def read_write(plot=False):
     print(f"mem_size: {mem_size:.2f} MB")
 
     formats = {
-        "Abaqus": (meshio.abaqus.write, meshio.abaqus.read, ["out.inp"]),
+        "Abaqus": (meshlane.abaqus.write, meshlane.abaqus.read, ["out.inp"]),
         "Ansys (ASCII)": (
-            lambda f, m: meshio.ansys.write(f, m, binary=False),
-            meshio.ansys.read,
+            lambda f, m: meshlane.ansys.write(f, m, binary=False),
+            meshlane.ansys.read,
             ["out.ans"],
         ),
         # "Ansys (binary)": (
-        #     lambda f, m: meshio.ansys.write(f, m, binary=True),
-        #     meshio.ansys.read,
+        #     lambda f, m: meshlane.ansys.write(f, m, binary=True),
+        #     meshlane.ansys.read,
         #     ["out.ans"],
         # ),
-        "AVS-UCD": (meshio.avsucd.write, meshio.avsucd.read, ["out.ucd"]),
-        # "CGNS": (meshio.cgns.write, meshio.cgns.read, ["out.cgns"]),
-        "Dolfin-XML": (meshio.dolfin.write, meshio.dolfin.read, ["out.xml"]),
-        "Exodus": (meshio.exodus.write, meshio.exodus.read, ["out.e"]),
-        # "FLAC3D": (meshio.flac3d.write, meshio.flac3d.read, ["out.f3grid"]),
+        "AVS-UCD": (meshlane.avsucd.write, meshlane.avsucd.read, ["out.ucd"]),
+        # "CGNS": (meshlane.cgns.write, meshlane.cgns.read, ["out.cgns"]),
+        "Dolfin-XML": (meshlane.dolfin.write, meshlane.dolfin.read, ["out.xml"]),
+        "Exodus": (meshlane.exodus.write, meshlane.exodus.read, ["out.e"]),
+        # "FLAC3D": (meshlane.flac3d.write, meshlane.flac3d.read, ["out.f3grid"]),
         "Gmsh 4.1 (ASCII)": (
-            lambda f, m: meshio.gmsh.write(f, m, binary=False),
-            meshio.gmsh.read,
+            lambda f, m: meshlane.gmsh.write(f, m, binary=False),
+            meshlane.gmsh.read,
             ["out.msh"],
         ),
         "Gmsh 4.1 (binary)": (
-            lambda f, m: meshio.gmsh.write(f, m, binary=True),
-            meshio.gmsh.read,
+            lambda f, m: meshlane.gmsh.write(f, m, binary=True),
+            meshlane.gmsh.read,
             ["out.msh"],
         ),
-        "MDPA": (meshio.mdpa.write, meshio.mdpa.read, ["out.mdpa"]),
-        "MED": (meshio.med.write, meshio.med.read, ["out.med"]),
-        "Medit": (meshio.medit.write, meshio.medit.read, ["out.mesh"]),
-        "MOAB": (meshio.h5m.write, meshio.h5m.read, ["out.h5m"]),
-        "Nastran": (meshio.nastran.write, meshio.nastran.read, ["out.bdf"]),
-        "Netgen": (meshio.netgen.write, meshio.netgen.read, ["out.vol"]),
-        "OFF": (meshio.off.write, meshio.off.read, ["out.off"]),
-        "Permas": (meshio.permas.write, meshio.permas.read, ["out.dato"]),
+        "MDPA": (meshlane.mdpa.write, meshlane.mdpa.read, ["out.mdpa"]),
+        "MED": (meshlane.med.write, meshlane.med.read, ["out.med"]),
+        "Medit": (meshlane.medit.write, meshlane.medit.read, ["out.mesh"]),
+        "MOAB": (meshlane.h5m.write, meshlane.h5m.read, ["out.h5m"]),
+        "Nastran": (meshlane.nastran.write, meshlane.nastran.read, ["out.bdf"]),
+        "Netgen": (meshlane.netgen.write, meshlane.netgen.read, ["out.vol"]),
+        "OFF": (meshlane.off.write, meshlane.off.read, ["out.off"]),
+        "Permas": (meshlane.permas.write, meshlane.permas.read, ["out.dato"]),
         "PLY (binary)": (
-            lambda f, m: meshio.ply.write(f, m, binary=True),
-            meshio.ply.read,
+            lambda f, m: meshlane.ply.write(f, m, binary=True),
+            meshlane.ply.read,
             ["out.ply"],
         ),
         "PLY (ASCII)": (
-            lambda f, m: meshio.ply.write(f, m, binary=False),
-            meshio.ply.read,
+            lambda f, m: meshlane.ply.write(f, m, binary=False),
+            meshlane.ply.read,
             ["out.ply"],
         ),
         "STL (binary)": (
-            lambda f, m: meshio.stl.write(f, m, binary=True),
-            meshio.stl.read,
+            lambda f, m: meshlane.stl.write(f, m, binary=True),
+            meshlane.stl.read,
             ["out.stl"],
         ),
         "STL (ASCII)": (
-            lambda f, m: meshio.stl.write(f, m, binary=False),
-            meshio.stl.read,
+            lambda f, m: meshlane.stl.write(f, m, binary=False),
+            meshlane.stl.read,
             ["out.stl"],
         ),
-        # "TetGen": (meshio.tetgen.write, meshio.tetgen.read, ["out.node", "out.ele"],),
+        # "TetGen": (meshlane.tetgen.write, meshlane.tetgen.read, ["out.node", "out.ele"],),
         "VTK (binary)": (
-            lambda f, m: meshio.vtk.write(f, m, binary=True),
-            meshio.vtk.read,
+            lambda f, m: meshlane.vtk.write(f, m, binary=True),
+            meshlane.vtk.read,
             ["out.vtk"],
         ),
         "VTK (ASCII)": (
-            lambda f, m: meshio.vtk.write(f, m, binary=False),
-            meshio.vtk.read,
+            lambda f, m: meshlane.vtk.write(f, m, binary=False),
+            meshlane.vtk.read,
             ["out.vtk"],
         ),
         "VTU (binary, uncompressed)": (
-            lambda f, m: meshio.vtu.write(f, m, binary=True, compression=None),
-            meshio.vtu.read,
+            lambda f, m: meshlane.vtu.write(f, m, binary=True, compression=None),
+            meshlane.vtu.read,
             ["out.vtu"],
         ),
         "VTU (binary, zlib)": (
-            lambda f, m: meshio.vtu.write(f, m, binary=True, compression="zlib"),
-            meshio.vtu.read,
+            lambda f, m: meshlane.vtu.write(f, m, binary=True, compression="zlib"),
+            meshlane.vtu.read,
             ["out.vtu"],
         ),
         "VTU (binary, LZMA)": (
-            lambda f, m: meshio.vtu.write(f, m, binary=True, compression="lzma"),
-            meshio.vtu.read,
+            lambda f, m: meshlane.vtu.write(f, m, binary=True, compression="lzma"),
+            meshlane.vtu.read,
             ["out.vtu"],
         ),
         "VTU (ASCII)": (
-            lambda f, m: meshio.vtu.write(f, m, binary=False),
-            meshio.vtu.read,
+            lambda f, m: meshlane.vtu.write(f, m, binary=False),
+            meshlane.vtu.read,
             ["out.vtu"],
         ),
-        "Wavefront .obj": (meshio.obj.write, meshio.obj.read, ["out.obj"]),
+        "Wavefront .obj": (meshlane.obj.write, meshlane.obj.read, ["out.obj"]),
         # "wkt": ".wkt",
         "XDMF (binary)": (
-            lambda f, m: meshio.xdmf.write(f, m, data_format="Binary"),
-            meshio.xdmf.read,
+            lambda f, m: meshlane.xdmf.write(f, m, data_format="Binary"),
+            meshlane.xdmf.read,
             ["out.xdmf", "out0.bin", "out1.bin"],
         ),
         "XDMF (HDF, GZIP)": (
-            lambda f, m: meshio.xdmf.write(f, m, data_format="HDF", compression="gzip"),
-            meshio.xdmf.read,
+            lambda f, m: meshlane.xdmf.write(f, m, data_format="HDF", compression="gzip"),
+            meshlane.xdmf.read,
             ["out.xdmf", "out.h5"],
         ),
         "XDMF (HDF, uncompressed)": (
-            lambda f, m: meshio.xdmf.write(f, m, data_format="HDF", compression=None),
-            meshio.xdmf.read,
+            lambda f, m: meshlane.xdmf.write(f, m, data_format="HDF", compression=None),
+            meshlane.xdmf.read,
             ["out.xdmf", "out.h5"],
         ),
         "XDMF (XML)": (
-            lambda f, m: meshio.xdmf.write(f, m, data_format="XML"),
-            meshio.xdmf.read,
+            lambda f, m: meshlane.xdmf.write(f, m, data_format="XML"),
+            meshlane.xdmf.read,
             ["out.xdmf"],
         ),
     }

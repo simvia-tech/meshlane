@@ -2,7 +2,7 @@ import pathlib
 
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -16,8 +16,8 @@ test_set = [
 def test(mesh, tmp_path):
     helpers.write_read(
         tmp_path,
-        meshio.tetgen.write,
-        meshio.tetgen.read,
+        meshlane.tetgen.write,
+        meshlane.tetgen.read,
         mesh,
         1.0e-15,
         extension=".node",
@@ -31,6 +31,6 @@ def test_point_cell_refs(filename, point_ref_sum, cell_ref_sum):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "tetgen" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert mesh.point_data["tetgen:ref"].sum() == point_ref_sum
     assert mesh.cell_data["tetgen:ref"][0].sum() == cell_ref_sum

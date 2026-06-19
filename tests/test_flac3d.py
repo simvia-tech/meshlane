@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -23,8 +23,8 @@ def test(mesh, binary, tmp_path):
     # mesh.write("out.f3grid")
     helpers.write_read(
         tmp_path,
-        lambda f, m: meshio.flac3d.write(f, m, binary=binary),
-        meshio.flac3d.read,
+        lambda f, m: meshlane.flac3d.write(f, m, binary=binary),
+        meshlane.flac3d.read,
         mesh,
         1.0e-15,
     )
@@ -38,7 +38,7 @@ def test_reference_file(filename):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "flac3d" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
 
     # points
     assert np.isclose(mesh.points.sum(), 307.0)

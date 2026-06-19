@@ -1,6 +1,6 @@
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -13,4 +13,4 @@ from . import helpers
     ],
 )
 def test(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.cgns.write, meshio.cgns.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, meshlane.cgns.write, meshlane.cgns.read, mesh, 1.0e-15)

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -19,7 +19,7 @@ from . import helpers
     ],
 )
 def test_dolfin(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.dolfin.write, meshio.dolfin.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, meshlane.dolfin.write, meshlane.dolfin.read, mesh, 1.0e-15)
 
 
 def test_generic_io(tmp_path):

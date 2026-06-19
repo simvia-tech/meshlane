@@ -1,4 +1,4 @@
-"""Tests for the meshio.ansysInp module."""
+"""Tests for the meshlane.ansysInp module."""
 import io
 import textwrap
 import tempfile
@@ -7,9 +7,9 @@ import os
 import numpy as np
 import pytest
 
-from meshio import Mesh, CellBlock
+from meshlane import Mesh, CellBlock
 # Direct imports from the internal module for in-memory tests
-from meshio.ansysInp._ansysInp import (
+from meshlane.ansysInp._ansysInp import (
     _read_lines,
     _slice_ints,
     _int_width,
@@ -210,7 +210,7 @@ class TestHelpers:
         assert _slice_ints("       -1", 9) == [-1]
 
     def test_slice_ints_stops_on_text(self):
-        # "FINISH" must not raise an exception — we stop
+        # "FINISH" must not raise an exception - we stop
         result = _slice_ints("FINISH", 9)
         assert result == []
 
@@ -321,7 +321,7 @@ class TestRead:
         assert mesh.cells[0].type == "tetra"
 
     def test_no_block_raises(self):
-        from meshio._exceptions import ReadError
+        from meshlane._exceptions import ReadError
         with pytest.raises(ReadError):
             _read_from_str("/PREP7\nFINISH\n")
 
@@ -363,7 +363,7 @@ class TestWrite:
         assert "1" in eblock_line
 
     def test_unknown_type_raises(self):
-        from meshio._exceptions import WriteError
+        from meshlane._exceptions import WriteError
         mesh = Mesh(
             points=np.zeros((3, 3)),
             cells=[CellBlock("polygon", np.array([[0, 1, 2]]))],
@@ -454,6 +454,6 @@ class TestCMBlockEdgeCases:
         """A CMBLOCK whose first item is a range marker (negative) must raise
         a clean ReadError instead of a TypeError.
         """
-        from meshio._exceptions import ReadError
+        from meshlane._exceptions import ReadError
         with pytest.raises(ReadError, match="range marker"):
             _read_from_str(BAD_CMBLOCK_INP)

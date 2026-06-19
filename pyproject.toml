@@ -3,8 +3,8 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meshio"
-version = "5.3.5"
+name = "meshlane"
+version = "5.4.0"
 description = "I/O for many mesh formats"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -18,8 +18,9 @@ keywords = [
   "finite elements"
 ]
 authors = [
-  {email = "nico.schloemer@gmail.com"},
-  {name = "Nico Schlömer"}
+  {name = "Mariam Kesba", email = "mariam.kesba@simvia.tech"},
+  {name = "Fatima-Zahra Noussi", email = "fatima-zahra.noussi@simvia.tech"},
+  {name = "Lucas Sovre", email = "lucas.sovre@simvia.tech"},
 ]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
@@ -39,7 +40,7 @@ classifiers = [
 ]
 dependencies = [
   "importlib_metadata; python_version<'3.8'",
-  "numpy>=1.20.0",
+  "numpy>=1.20.0,<2",
   "rich",
 ]
 
@@ -50,16 +51,16 @@ all = [
 ]
 
 [project.urls]
-homepage = "https://github.com/nschloe/meshio"
-code = "https://github.com/nschloe/meshio"
-issues = "https://github.com/nschloe/meshio/issues"
+homepage = "https://github.com/simvia-tech/meshlane"
+code = "https://github.com/simvia-tech/meshlane"
+issues = "https://github.com/simvia-tech/meshlane/issues"
 
 [project.entry-points.console_scripts]
-meshio = "meshio._cli:main"
+meshlane = "meshlane._cli:main"
 
 [tool.isort]
 profile = "black"
 
 # [options.data_files]
 # share/paraview-5.9/plugins =
-#     tools/paraview-meshio-plugin.py
+#     tools/paraview-meshlane-plugin.py

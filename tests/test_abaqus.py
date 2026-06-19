@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -24,7 +24,7 @@ from . import helpers
     ],
 )
 def test(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.abaqus.write, meshio.abaqus.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, meshlane.abaqus.write, meshlane.abaqus.read, mesh, 1.0e-15)
 
 
 @pytest.mark.parametrize(
@@ -40,7 +40,7 @@ def test_reference_file(filename, ref_sum, ref_num_cells, ref_num_cell_sets):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "abaqus" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
 
     assert np.isclose(np.sum(mesh.points), ref_sum)
     assert sum(len(cells.data) for cells in mesh.cells) == ref_num_cells
@@ -59,11 +59,11 @@ def test_elset(tmp_path):
         "right": [np.array([0]), np.array([])],
         "left": [np.array([]), np.array([1])],
     }
-    mesh_ref = meshio.Mesh(points, cells, cell_sets=cell_sets)
+    mesh_ref = meshlane.Mesh(points, cells, cell_sets=cell_sets)
 
     filepath = tmp_path / "test.inp"
-    meshio.abaqus.write(filepath, mesh_ref)
-    mesh = meshio.abaqus.read(filepath)
+    meshlane.abaqus.write(filepath, mesh_ref)
+    mesh = meshlane.abaqus.read(filepath)
 
     assert np.allclose(mesh_ref.points, mesh.points)
 

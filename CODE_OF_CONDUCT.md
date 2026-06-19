@@ -1,4 +1,4 @@
-# meshio Code of Conduct
+# meshlane Code of Conduct
 
 ## Our Pledge
 

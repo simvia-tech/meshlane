@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_equal
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -15,7 +15,7 @@ def test_cells_dict():
     assert np.array_equal(mesh.cells_dict["triangle"], [[0, 1, 2], [0, 2, 3]])
 
     # two cells groups
-    mesh = meshio.Mesh(
+    mesh = meshlane.Mesh(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
         [("triangle", [[0, 1, 2]]), ("triangle", [[0, 2, 3]])],
         cell_data={"a": [[0.5], [1.3]]},
@@ -52,7 +52,7 @@ def test_sets_to_int_data():
 
 @pytest.mark.skip
 def test_sets_to_int_data_warning():
-    mesh = meshio.Mesh(
+    mesh = meshlane.Mesh(
         [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]],
         {"triangle": [[0, 1, 2], [1, 2, 3]]},
         cell_sets={"tag": [[0]]},
@@ -61,7 +61,7 @@ def test_sets_to_int_data_warning():
         mesh.cell_sets_to_data()
     assert np.all(mesh.cell_data["tag"] == np.array([[0, -1]]))
 
-    mesh = meshio.Mesh(
+    mesh = meshlane.Mesh(
         [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]],
         {"triangle": [[0, 1, 2], [1, 2, 3]]},
         point_sets={"tag": [[0, 1, 3]]},
@@ -82,7 +82,7 @@ def test_int_data_to_sets():
 
 
 def test_gh_1165():
-    mesh = meshio.Mesh(
+    mesh = meshlane.Mesh(
         [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
         {
             "triangle": [[0, 1, 2], [1, 2, 3]],

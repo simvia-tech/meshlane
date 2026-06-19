@@ -1,6 +1,6 @@
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -22,6 +22,6 @@ from . import helpers
 @pytest.mark.parametrize("binary", [False, True])
 def test(mesh, binary, tmp_path):
     def writer(*args, **kwargs):
-        return meshio.ansys.write(*args, binary=binary, **kwargs)
+        return meshlane.ansys.write(*args, binary=binary, **kwargs)
 
-    helpers.write_read(tmp_path, writer, meshio.ansys.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, writer, meshlane.ansys.read, mesh, 1.0e-15)

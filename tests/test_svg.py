@@ -1,6 +1,6 @@
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -16,4 +16,4 @@ test_set = [
 @pytest.mark.parametrize("mesh", test_set)
 def test(mesh, tmp_path):
     filepath = tmp_path / "out.svg"
-    meshio.write_points_cells(filepath, mesh.points, mesh.cells)
+    meshlane.write_points_cells(filepath, mesh.points, mesh.cells)

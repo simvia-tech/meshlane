@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from meshio.openfoam._openfoam import (
+from meshlane.openfoam._openfoam import (
     _detect_format,
     _find_n_and_data_start,
     _read_binary_points,
@@ -149,7 +149,7 @@ def case_dir(tmp_path, hex_cube_data):
     _write_ascii_faces(poly / "faces", faces)
     _write_ascii_labels(poly / "owner", owner, "owner")
     _write_ascii_boundary(poly / "boundary", boundary)
-    # No neighbour file — all faces are boundary faces
+    # No neighbour file - all faces are boundary faces
     (tmp_path / "case.foam").write_text("")
     return tmp_path
 
@@ -482,7 +482,7 @@ class TestBuildPyramid:
             [3, 0, 4],
         ]
         conn = _build_pyramid(oriented, P)
-        # Apex (node 4) must be last in meshio convention
+        # Apex (node 4) must be last in meshlane convention
         assert conn[-1] == 4
 
 
@@ -657,7 +657,7 @@ class TestBuildVolumeCells:
         cells = _build_volume_cells(
             1, faces, np.array(owner), np.array(neighbour, dtype=int), points
         )
-        from meshio._mesh import CellBlock
+        from meshlane._mesh import CellBlock
         assert all(isinstance(cb, CellBlock) for cb in cells)
 
     def test_two_hexes(self):
@@ -972,10 +972,10 @@ class TestReadFull:
 
 
 class TestPublicAPI:
-    """The format must be reachable through the public ``meshio.read`` entry
-    point. This is checked in a clean subprocess (only ``import meshio``) so it
+    """The format must be reachable through the public ``meshlane.read`` entry
+    point. This is checked in a clean subprocess (only ``import meshlane``) so it
     exercises the package __init__ registration, not the direct
-    ``meshio.openfoam._openfoam`` import used elsewhere in this file.
+    ``meshlane.openfoam._openfoam`` import used elsewhere in this file.
     """
 
     def test_meshio_read_foam(self, case_dir):
@@ -984,8 +984,8 @@ class TestPublicAPI:
 
         foam = case_dir / "case.foam"
         code = (
-            "import meshio;"
-            f"m = meshio.read(r'{foam}');"
+            "import meshlane;"
+            f"m = meshlane.read(r'{foam}');"
             "assert len(m.points) == 8, m.points.shape;"
             "assert any(cb.type == 'hexahedron' for cb in m.cells)"
         )
@@ -995,13 +995,13 @@ class TestPublicAPI:
             text=True,
         )
         assert result.returncode == 0, (
-            f"meshio.read('*.foam') failed via public API:\n{result.stderr}"
+            f"meshlane.read('*.foam') failed via public API:\n{result.stderr}"
         )
 
     def test_openfoam_read_exposed(self):
-        """meshio.openfoam.read must exist (package __init__ ran)."""
-        import meshio
-        assert hasattr(meshio.openfoam, "read")
+        """meshlane.openfoam.read must exist (package __init__ ran)."""
+        import meshlane
+        assert hasattr(meshlane.openfoam, "read")
 
 
 class TestReadTwoCellMesh:

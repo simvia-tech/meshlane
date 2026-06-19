@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -23,7 +23,7 @@ from . import helpers
     ],
 )
 def test_io(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.medit.write, meshio.medit.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, meshlane.medit.write, meshlane.medit.read, mesh, 1.0e-15)
 
 
 def test_generic_io(tmp_path):
@@ -70,7 +70,7 @@ def test_reference_file(
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "medit" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert mesh.points.shape[0] == ref_num_points
     assert mesh.points.shape[1] == 3
 

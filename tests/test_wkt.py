@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -18,7 +18,7 @@ from . import helpers
     ],
 )
 def test_wkt(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.wkt.write, meshio.wkt.read, mesh, 1.0e-12)
+    helpers.write_read(tmp_path, meshlane.wkt.write, meshlane.wkt.read, mesh, 1.0e-12)
 
 
 @pytest.mark.parametrize(
@@ -29,7 +29,7 @@ def test_reference_file(filename, ref_sum, ref_num_cells):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "wkt" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     tol = 1.0e-5
     s = np.sum(mesh.points)
     assert abs(s - ref_sum) < tol * abs(ref_sum)

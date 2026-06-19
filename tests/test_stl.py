@@ -1,6 +1,6 @@
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -19,6 +19,6 @@ from . import helpers
 )
 def test_stl(mesh, binary, tol, tmp_path):
     def writer(*args, **kwargs):
-        return meshio.stl.write(*args, binary=binary, **kwargs)
+        return meshlane.stl.write(*args, binary=binary, **kwargs)
 
-    helpers.write_read(tmp_path, writer, meshio.stl.read, mesh, tol)
+    helpers.write_read(tmp_path, writer, meshlane.stl.read, mesh, tol)

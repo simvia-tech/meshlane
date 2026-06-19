@@ -1,7 +1,7 @@
 import numpy as np
 
-from meshio import Mesh
-from meshio.vtk_io import vtk_to_meshio_type
+from meshlane import Mesh
+from meshlane.vtk_io import vtk_to_meshio_type
 
 
 def read(filetype, filename):

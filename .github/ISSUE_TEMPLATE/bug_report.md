@@ -15,9 +15,5 @@ A minimal code example that reproduces the problem would be a big help if you ca
 **Diagnose**
 I may ask you to cut and paste the output of the following command.
 ```
-pip freeze | grep meshio
+pip freeze | grep meshlane
 ```
-
-**Did I help?**
-
-If I was able to resolve your problem, consider [sponsoring](https://github.com/sponsors/nschloe) my work on meshio, or [buy me a coffee](https://ko-fi.com/nschloe) to say thanks.

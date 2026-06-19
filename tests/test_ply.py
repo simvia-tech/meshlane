@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -27,12 +27,12 @@ from . import helpers
 @pytest.mark.parametrize("binary", [False, True])
 def test_ply(mesh, binary, tmp_path):
     def writer(*args, **kwargs):
-        return meshio.ply.write(*args, binary=binary, **kwargs)
+        return meshlane.ply.write(*args, binary=binary, **kwargs)
 
     for k, c in enumerate(mesh.cells):
-        mesh.cells[k] = meshio.CellBlock(c.type, c.data.astype(np.int32))
+        mesh.cells[k] = meshlane.CellBlock(c.type, c.data.astype(np.int32))
 
-    helpers.write_read(tmp_path, writer, meshio.ply.read, mesh, 1.0e-12)
+    helpers.write_read(tmp_path, writer, meshlane.ply.read, mesh, 1.0e-12)
 
 
 @pytest.mark.parametrize(
@@ -46,7 +46,7 @@ def test_reference_file(filename, ref_sum, ref_num_cells):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "ply" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     tol = 1.0e-2
     s = np.sum(mesh.points)
     assert abs(s - ref_sum) < tol * abs(ref_sum)
@@ -58,9 +58,9 @@ def test_no_cells(binary):
     import io
 
     vertices = np.random.random((30, 3))
-    mesh = meshio.Mesh(vertices, [])
+    mesh = meshlane.Mesh(vertices, [])
     file = io.BytesIO()
     mesh.write(file, "ply", binary=binary)
-    mesh2 = meshio.read(io.BytesIO(file.getvalue()), "ply")
+    mesh2 = meshlane.read(io.BytesIO(file.getvalue()), "ply")
     assert np.array_equal(mesh.points, mesh2.points)
     assert len(mesh2.cells) == 0

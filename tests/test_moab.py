@@ -1,6 +1,6 @@
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -18,7 +18,7 @@ h5py = pytest.importorskip("h5py")
     ],
 )
 def test_io(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshio.h5m.write, meshio.h5m.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, meshlane.h5m.write, meshlane.h5m.read, mesh, 1.0e-15)
 
 
 def test_generic_io(tmp_path):

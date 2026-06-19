@@ -5,29 +5,29 @@ import string
 
 import numpy as np
 
-import meshio
+import meshlane
 
 # In general:
 # Use values with an infinite decimal representation to test precision.
 
-empty_mesh = meshio.Mesh(np.empty((0, 3)), [])
+empty_mesh = meshlane.Mesh(np.empty((0, 3)), [])
 
-line_mesh = meshio.Mesh(
+line_mesh = meshlane.Mesh(
     [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
     [("line", [[0, 1], [0, 2], [0, 3], [1, 2], [2, 3]])],
 )
 
-tri_mesh_one_cell = meshio.Mesh(
+tri_mesh_one_cell = meshlane.Mesh(
     [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
     [("triangle", [[0, 1, 2]])],
 )
 
-tri_mesh_2d = meshio.Mesh(
+tri_mesh_2d = meshlane.Mesh(
     [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
     [("triangle", [[0, 1, 2], [0, 2, 3]])],
 )
 
-tri_mesh_5 = meshio.Mesh(
+tri_mesh_5 = meshlane.Mesh(
     [
         [0.0, 0.0],
         [1.0, 0.0],
@@ -40,14 +40,14 @@ tri_mesh_5 = meshio.Mesh(
     [("triangle", [[0, 1, 5], [0, 5, 6], [1, 2, 5], [2, 4, 5], [2, 3, 4]])],
 )
 
-tri_mesh = meshio.Mesh(
+tri_mesh = meshlane.Mesh(
     [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
     [("triangle", [[0, 1, 2], [0, 2, 3]])],
 )
 
-line_tri_mesh = meshio.Mesh(line_mesh.points, line_mesh.cells + tri_mesh.cells)
+line_tri_mesh = meshlane.Mesh(line_mesh.points, line_mesh.cells + tri_mesh.cells)
 
-triangle6_mesh = meshio.Mesh(
+triangle6_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -62,7 +62,7 @@ triangle6_mesh = meshio.Mesh(
     [("triangle6", [[0, 1, 2, 3, 4, 5], [1, 6, 2, 8, 7, 4]])],
 )
 
-quad_mesh = meshio.Mesh(
+quad_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -75,7 +75,7 @@ quad_mesh = meshio.Mesh(
 )
 
 d = 0.1
-quad8_mesh = meshio.Mesh(
+quad8_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -94,7 +94,7 @@ quad8_mesh = meshio.Mesh(
     [("quad8", [[0, 1, 2, 3, 4, 5, 6, 7], [1, 8, 9, 2, 10, 11, 12, 5]])],
 )
 
-tri_quad_mesh = meshio.Mesh(
+tri_quad_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -112,7 +112,7 @@ tri_quad_mesh = meshio.Mesh(
 )
 
 # same as tri_quad_mesh with reversed cell type order
-quad_tri_mesh = meshio.Mesh(
+quad_tri_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -127,7 +127,7 @@ quad_tri_mesh = meshio.Mesh(
     ],
 )
 
-tet_mesh = meshio.Mesh(
+tet_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -138,7 +138,7 @@ tet_mesh = meshio.Mesh(
     [("tetra", [[0, 1, 2, 4], [0, 2, 3, 4]])],
 )
 
-tet10_mesh = meshio.Mesh(
+tet10_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -155,7 +155,7 @@ tet10_mesh = meshio.Mesh(
     [("tetra10", [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]])],
 )
 
-hex_mesh = meshio.Mesh(
+hex_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -169,7 +169,7 @@ hex_mesh = meshio.Mesh(
     [("hexahedron", [[0, 1, 2, 3, 4, 5, 6, 7]])],
 )
 
-wedge_mesh = meshio.Mesh(
+wedge_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -181,7 +181,7 @@ wedge_mesh = meshio.Mesh(
     [("wedge", [[0, 1, 2, 3, 4, 5]])],
 )
 
-pyramid_mesh = meshio.Mesh(
+pyramid_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -192,7 +192,7 @@ pyramid_mesh = meshio.Mesh(
     [("pyramid", [[0, 1, 2, 3, 4]])],
 )
 
-hex20_mesh = meshio.Mesh(
+hex20_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -221,7 +221,7 @@ hex20_mesh = meshio.Mesh(
     [("hexahedron20", [np.arange(20)])],
 )
 
-polygon_mesh = meshio.Mesh(
+polygon_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -243,7 +243,7 @@ polygon_mesh = meshio.Mesh(
     ],
 )
 
-polygon_mesh_one_cell = meshio.Mesh(
+polygon_mesh_one_cell = meshlane.Mesh(
     [
         [1.0, 0.0, 0.0],
         [1.0, 1.0, 0.0],
@@ -258,7 +258,7 @@ polygon_mesh_one_cell = meshio.Mesh(
 
 # Make sure that the polygon cell blocking works.
 # This mesh is identical with tri_quad_mesh.
-polygon2_mesh = meshio.Mesh(
+polygon2_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -275,7 +275,7 @@ polygon2_mesh = meshio.Mesh(
     ],
 )
 
-polyhedron_mesh = meshio.Mesh(
+polyhedron_mesh = meshlane.Mesh(
     [  # Two layers of a unit square
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -338,7 +338,7 @@ polyhedron_mesh = meshio.Mesh(
 )
 
 # From <https://github.com/nschloe/meshio/issues/1065>:
-lagrange_high_order_mesh = meshio.Mesh(
+lagrange_high_order_mesh = meshlane.Mesh(
     [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -757,8 +757,8 @@ def write_read(tmp_path, writer, reader, input_mesh, atol, extension=".dat"):
 
 
 def generic_io(filepath):
-    meshio.write_points_cells(filepath, tri_mesh.points, tri_mesh.cells)
-    out_mesh = meshio.read(filepath)
+    meshlane.write_points_cells(filepath, tri_mesh.points, tri_mesh.cells)
+    out_mesh = meshlane.read(filepath)
     assert (abs(out_mesh.points - tri_mesh.points) < 1.0e-15).all()
     for c0, c1 in zip(tri_mesh.cells, out_mesh.cells):
         assert c0.type == c1.type

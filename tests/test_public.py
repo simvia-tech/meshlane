@@ -1,6 +1,6 @@
-import meshio
+import meshlane
 
 
 def test_public_attributes():
     # Just make sure this is here
-    meshio.extension_to_filetypes
+    meshlane.extension_to_filetypes

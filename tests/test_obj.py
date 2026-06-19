@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -20,9 +20,9 @@ from . import helpers
 )
 def test_obj(mesh, tmp_path):
     for k, c in enumerate(mesh.cells):
-        mesh.cells[k] = meshio.CellBlock(c.type, c.data.astype(np.int32))
+        mesh.cells[k] = meshlane.CellBlock(c.type, c.data.astype(np.int32))
 
-    helpers.write_read(tmp_path, meshio.obj.write, meshio.obj.read, mesh, 1.0e-12)
+    helpers.write_read(tmp_path, meshlane.obj.write, meshlane.obj.read, mesh, 1.0e-12)
 
 
 @pytest.mark.skip("Fails point data consistency check.")
@@ -33,7 +33,7 @@ def test_reference_file(filename, ref_sum, ref_num_cells):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "obj" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     tol = 1.0e-5
     s = np.sum(mesh.points)
     assert abs(s - ref_sum) < tol * abs(ref_sum)

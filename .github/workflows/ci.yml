@@ -35,6 +35,6 @@ jobs:
       - name: Test with tox
         run: |
           pip install tox
-          tox -- --cov meshio --cov-report xml --cov-report term
+          tox -- --cov meshlane --cov-report xml --cov-report term
       - uses: codecov/codecov-action@v3
         if: ${{ matrix.python-version == '3.10' && matrix.os == 'ubuntu-latest' }}

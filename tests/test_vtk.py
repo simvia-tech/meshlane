@@ -4,7 +4,7 @@ from functools import partial
 import numpy as np
 import pytest
 
-import meshio
+import meshlane
 
 from . import helpers
 
@@ -42,18 +42,18 @@ test_set = {
 @pytest.mark.parametrize("binary", [True, False])
 def test(mesh, binary, tmp_path):
     def writer(*args, **kwargs):
-        return meshio.vtk.write(*args, binary=binary, **kwargs)
+        return meshlane.vtk.write(*args, binary=binary, **kwargs)
 
-    helpers.write_read(tmp_path, writer, meshio.vtk.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, writer, meshlane.vtk.read, mesh, 1.0e-15)
 
 
 @pytest.mark.parametrize("mesh", test_set)
 @pytest.mark.parametrize("binary", [True, False])
 def test_vtk42(mesh, binary, tmp_path):
     def writer(*args, **kwargs):
-        return meshio.vtk.write(*args, binary=binary, fmt_version="4.2", **kwargs)
+        return meshlane.vtk.write(*args, binary=binary, fmt_version="4.2", **kwargs)
 
-    helpers.write_read(tmp_path, writer, meshio.vtk.read, mesh, 1.0e-15)
+    helpers.write_read(tmp_path, writer, meshlane.vtk.read, mesh, 1.0e-15)
 
 
 def test_generic_io(tmp_path):
@@ -70,14 +70,14 @@ def test_reference_file(filename, ref_sum, ref_num_cells, binary, tmp_path):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "vtk" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     tol = 1.0e-2
     s = np.sum(mesh.points)
     assert abs(s - ref_sum) < tol * ref_sum
     assert mesh.cells[0].type == "triangle"
     assert len(mesh.cells[0].data) == ref_num_cells
-    writer = partial(meshio.vtk.write, binary=binary)
-    helpers.write_read(tmp_path, writer, meshio.vtk.read, mesh, 1.0e-15)
+    writer = partial(meshlane.vtk.write, binary=binary)
+    helpers.write_read(tmp_path, writer, meshlane.vtk.read, mesh, 1.0e-15)
 
 
 @pytest.mark.parametrize(
@@ -97,7 +97,7 @@ def test_structured(filename, ref_cells, ref_num_cells, ref_num_pnt):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "vtk" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert len(mesh.cells) == 1
     assert ref_cells == mesh.cells[0].type
     assert len(mesh.cells[0].data) == ref_num_cells
@@ -106,7 +106,7 @@ def test_structured(filename, ref_cells, ref_num_cells, ref_num_pnt):
 
 def test_pathlike():
     this_dir = pathlib.Path(__file__).resolve().parent
-    meshio.read(this_dir / "meshes" / "vtk" / "rbc_001.vtk")
+    meshlane.read(this_dir / "meshes" / "vtk" / "rbc_001.vtk")
 
 
 @pytest.mark.parametrize(
@@ -116,6 +116,6 @@ def test_color_scalars(filename, ref_num_points, ref_num_cells):
     this_dir = pathlib.Path(__file__).resolve().parent
     filename = this_dir / "meshes" / "vtk" / filename
 
-    mesh = meshio.read(filename)
+    mesh = meshlane.read(filename)
     assert len(mesh.points) == ref_num_points
     assert len(mesh.cells) == ref_num_cells

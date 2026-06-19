@@ -1,8 +1,8 @@
-# meshio contributing guidelines
+# meshlane contributing guidelines
 
-The meshio community appreciates your contributions via issues and
+The meshlane community appreciates your contributions via issues and
 pull requests. Note that the [code of conduct](CODE_OF_CONDUCT.md)
-applies to all interactions with the meshio project, including
+applies to all interactions with the meshlane project, including
 issues and pull requests.
 
 When submitting pull requests, please follow the style guidelines of
