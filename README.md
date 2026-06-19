@@ -9,14 +9,14 @@
 > [meshio](https://github.com/nschloe/meshio) by Nico Schlömer.
 > It builds directly on meshio's codebase and history, and extends it with new
 > format support and fixes geared toward FEA/CFD interoperability
-> (Code_Aster, Ansys, OpenFOAM, Salome/MED). See [Relationship to meshio](#relationship-to-meshio).
+> (code_aster, Ansys, OpenFOAM, Salome/MED). See [Relationship to meshio](#relationship-to-meshio).
 
 There are many mesh formats for representing unstructured meshes. meshlane reads
 and writes all of the following and converts smoothly between them:
 
 > [Abaqus](http://abaqus.software.polimi.it/v6.14/index.html) (`.inp`),
 > ANSYS msh (`.msh`),
-> **Ansys/APDL input** (`.inp`),
+> **Ansys/APDL input** (`.inp`, `.cdb`),
 > [AVS-UCD](https://lanl.github.io/LaGriT/pages/docs/read_avs.html) (`.avs`),
 > [CGNS](https://cgns.github.io/) (`.cgns`),
 > [DOLFIN XML](https://manpages.ubuntu.com/manpages/jammy/en/man1/dolfin-convert.1.html) (`.xml`),
@@ -32,7 +32,7 @@ and writes all of the following and converts smoothly between them:
 > [Gmsh](https://gmsh.info/doc/texinfo/gmsh.html#File-formats) (formats 2.2, 4.0, 4.1, `.msh`),
 > [OBJ](https://en.wikipedia.org/wiki/Wavefront_.obj_file) (`.obj`),
 > [OFF](https://segeval.cs.princeton.edu/public/off_format.html) (`.off`),
-> **OpenFOAM polyMesh** (ASCII & binary),
+> **OpenFOAM polyMesh** (.foam, read only),
 > [PERMAS](https://www.intes.de) (`.post`, `.post.gz`, `.dato`, `.dato.gz`),
 > [PLY](<https://en.wikipedia.org/wiki/PLY_(file_format)>) (`.ply`),
 > [STL](<https://en.wikipedia.org/wiki/STL_(file_format)>) (`.stl`),
@@ -49,9 +49,16 @@ and writes all of the following and converts smoothly between them:
 ## What meshlane adds over meshio
 
 - **OpenFOAM polyMesh reader**: ASCII and binary, arbitrary cell types (tri / quad / polyhedra).
-- **Ansys/APDL input** reader (`.inp`) for FEA interoperability benchmarks.
-- **MED/Salome improvements**: multi-mesh files, polygon cell support, more robust
-  Code_Aster round-trips and field/group handling.
+- **Ansys/APDL** `.inp` / `.cdb` reader & writer for FEA interoperability.
+- **MED/Salome improvements:**
+  - multi-mesh files (several meshes in one `.med`)
+  - polygon cell support, including ragged/Voronoi meshes
+  - multi-timestep result fields, with `NDT`/`NOR`/`PDT` preserved
+  - round-trip of mesh metadata, field units and component names
+  - MED 4.1 bitmask metadata and HDF5 link-creation-order, so files stay
+    readable by Salome / medfile / mdump
+  - extended field data types (float32/64, int32/64)
+  - robust handling of missing `FAS` / `NOEUD` / `GRO` sections and merged cell blocks
 - Encoding and parsing robustness fixes (Latin-1 metadata, group name parsing).
 
 ## Installation
@@ -165,8 +172,8 @@ tox
 meshlane is a fork of [meshio](https://github.com/nschloe/meshio). We kept the full
 git history and authorship so the original work remains properly attributed. We
 started a separate project, rather than only contributing upstream, to move faster
-on the FEA/CFD interoperability features we need (Code_Aster, Ansys, OpenFOAM,
-Salome/MED) and to maintain them under active development.
+on the FEA/CFD interoperability features we need (code_aster, Ansys, code_saturne, OpenFOAM,
+Salome, etc.) and to maintain them under active development.
 
 meshio is no longer actively maintained. [Simvia](https://simvia.tech) is a company
 willing to commit time and people to keep this project alive and moving forward.
