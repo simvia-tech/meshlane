@@ -58,6 +58,9 @@ issues = "https://github.com/simvia-tech/meshlane/issues"
 [project.entry-points.console_scripts]
 meshlane = "meshlane._cli:main"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.isort]
 profile = "black"
 
