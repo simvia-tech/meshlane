@@ -4,6 +4,15 @@ authors:
 - family-names: "Schlömer"
   given-names: "Nico"
   orcid: "https://orcid.org/0000-0001-5228-0946"
+- family-names: "Kesba"
+  given-names: "Mariam"
+  email: "mariam.kesba@simvia.tech"
+- family-names: "Noussi"
+  given-names: "Fatima-Zahra"
+  email: "fatima-zahra.noussi@simvia.tech"
+- family-names: "Sovre"
+  given-names: "Lucas"
+  email: "lucas.sovre@simvia.tech"
 title: "meshlane: Tools for mesh files"
 doi: 10.5281/zenodo.1173115
 url: https://github.com/simvia-tech/meshlane
