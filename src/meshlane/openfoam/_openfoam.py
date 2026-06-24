@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 
@@ -28,8 +28,8 @@ def _detect_format(path: Path) -> tuple[str, int, int]:
     label_bytes  : 4 (label=32) or 8 (label=64)
     scalar_bytes : 4 (scalar=32) or 8 (scalar=64)
     """
-    fmt          = "ascii"
-    label_bytes  = 8
+    fmt = "ascii"
+    label_bytes = 8
     scalar_bytes = 8
 
     with open(path, "rb") as f:
@@ -49,7 +49,7 @@ def _detect_format(path: Path) -> tuple[str, int, int]:
                 ml = re.search(r"label=(\d+)", arch)
                 ms = re.search(r"scalar=(\d+)", arch)
                 if ml:
-                    label_bytes  = int(ml.group(1)) // 8
+                    label_bytes = int(ml.group(1)) // 8
                 if ms:
                     scalar_bytes = int(ms.group(1)) // 8
 
@@ -60,179 +60,187 @@ def _detect_format(path: Path) -> tuple[str, int, int]:
     return fmt, label_bytes, scalar_bytes
 
 
-def _find_n_and_data_start(
-    raw: bytes,
-    skip_paren: bool = False,
-) -> tuple[int, int]:
+class _RaggedArray:
     """
-    Iterates through `raw` line by line (ASCII) to find:
-        1. The end of the FoamFile header (line containing '}')
-        2. The number N (first purely numeric line after the header)
-        3. Optionally the line '(' and the empty line that may follow it
-           (if skip_paren=True)
-    Returns (N, offset_start_of_binary_data).
+    Rows of variable length stored in CSR (compressed sparse row) form.
+
+    A polyMesh has two ragged integer relations -- faces (node ids per face)
+    and cell topology (face ids per cell) -- both of which would cost several
+    gigabytes as a Python ``list[list[int]]`` on an industrial mesh (tens of
+    millions of rows). CSR stores them as two flat numpy arrays instead:
+
+    * ``conn`` -- every row's values concatenated back to back;
+    * ``off``  -- length ``n_rows + 1``, so row ``i`` is
+      ``conn[off[i]:off[i + 1]]``.
+
+    Indexing (``a[i]``) and ``len(a)`` behave like the list-of-lists they
+    replace, so consumers need no special-casing.
     """
-    pos         = 0
-    in_foam     = False
-    depth       = 0
-    header_done = False
-    n           = None
 
-    while pos < len(raw):
-        nl = raw.find(b"\n", pos)
-        if nl == -1:
-            nl = len(raw) - 1
+    __slots__ = ("conn", "off")
 
-        line = raw[pos:nl].decode("ascii", errors="replace").strip()
+    def __init__(self, conn: np.ndarray, off: np.ndarray):
+        self.conn = conn
+        self.off = off
 
-        # Phase 1: consume the header
-        if not header_done:
-            if "FoamFile" in line:
-                in_foam = True
-            if in_foam:
-                depth += line.count("{") - line.count("}")
-                if depth <= 0 and "}" in line:
-                    header_done = True
-            pos = nl + 1
-            continue
+    @classmethod
+    def from_lists(cls, rows: list) -> "_RaggedArray":
+        """Build from a Python list-of-lists (used for small ASCII inputs)."""
+        if len(rows) == 0:
+            return cls(np.empty(0, dtype=np.int64), np.zeros(1, dtype=np.int64))
+        sizes = np.fromiter((len(r) for r in rows), dtype=np.int64, count=len(rows))
+        off = np.empty(len(rows) + 1, dtype=np.int64)
+        off[0] = 0
+        np.cumsum(sizes, out=off[1:])
+        conn = np.fromiter(
+            (int(v) for r in rows for v in r), dtype=np.int64, count=int(off[-1])
+        )
+        return cls(conn, off)
 
-        # Phase 2: after the header
-        # Skip empty lines and comments
-        if not line or line.startswith("//") or line.startswith("/*"):
-            pos = nl + 1
-            continue
+    def __len__(self) -> int:
+        return len(self.off) - 1
 
-        # Find N
-        if n is None and line.isdigit():
-            n   = int(line)
-            pos = nl + 1
-            continue
+    def __getitem__(self, i: int) -> np.ndarray:
+        return self.conn[self.off[i] : self.off[i + 1]]
 
-        # After N
-        if n is not None:
-            if skip_paren and line == "(":
-                pos = nl + 1
-                # Skip optional empty line following "("
-                nl2  = raw.find(b"\n", pos)
-                if nl2 == -1:
-                    nl2 = len(raw) - 1
-                line2 = raw[pos:nl2].decode("ascii", errors="replace").strip()
-                if not line2:
-                    pos = nl2 + 1
-                return n, pos
-            if not skip_paren:
-                # Data starts at this position
-                return n, pos
+    def sizes(self) -> np.ndarray:
+        """Length of every row, as a numpy array."""
+        return np.diff(self.off)
 
-        pos = nl + 1
+    def to_lists(self) -> list:
+        """Materialise back to a Python list-of-lists (used by tests)."""
+        return [
+            self.conn[self.off[i] : self.off[i + 1]].tolist() for i in range(len(self))
+        ]
 
-    raise ValueError(
-        f"Could not find data block (n={n}, skip_paren={skip_paren})"
-    )
+
+def _data_start(raw: bytes) -> tuple[int, int]:
+    """
+    Return (N, offset just after the outer '(') for a binary OpenFOAM List.
+
+    Layout (verified against real polyMesh output)::
+
+        FoamFile { ... }
+        // * * * ...
+        N
+        (<binary data ...
+
+    For contiguous lists (vectorField, labelList) the binary data starts
+    immediately after '('. ``N`` is the last integer between the header's
+    closing '}' and that '('.
+    """
+    end = raw.find(b"}")  # end of the FoamFile header block
+    if end == -1:
+        raise ValueError("No FoamFile header found")
+    lp = raw.find(b"(", end)  # '(' opening the outer list
+    if lp == -1:
+        raise ValueError("No '(' opening the data list found")
+    nums = re.findall(rb"\d+", raw[end:lp])
+    if not nums:
+        raise ValueError("No element count found before '('")
+    return int(nums[-1]), lp + 1
 
 
 def _read_binary_points(path: Path, scalar_bytes: int = 8) -> np.ndarray:
-    """
-    Binary points structure:
-        <ASCII header>
-        N\\n
-        <N * 3 * scalar bytes binary>   (no parentheses)
-    """
+    """Binary vectorField:  N ( <N*3*scalar bytes binary> )."""
     raw = path.read_bytes()
-    n, data_start = _find_n_and_data_start(raw, skip_paren=False)
+    n, start = _data_start(raw)
 
-    dtype    = "<f4" if scalar_bytes == 4 else "<f8"
+    dtype = "<f4" if scalar_bytes == 4 else "<f8"
     expected = n * 3 * scalar_bytes
-    pts_raw  = raw[data_start: data_start + expected]
-
-    if len(pts_raw) != expected:
+    if len(raw) - start < expected:
         raise ValueError(
-            f"points: expected {expected} bytes, got {len(pts_raw)} "
-            f"(n={n}, data_start={data_start}, file_size={len(raw)})"
+            f"points: expected {expected} bytes, got {len(raw) - start} "
+            f"(n={n}, start={start}, file_size={len(raw)})"
         )
-
-    return np.frombuffer(pts_raw, dtype=dtype).reshape(n, 3).astype(float).copy()
+    return (
+        np.frombuffer(raw, dtype=dtype, count=n * 3, offset=start)
+        .reshape(n, 3)
+        .astype(float)
+    )
 
 
 def _read_binary_labels(path: Path, label_bytes: int = 4) -> np.ndarray:
-    """
-    Binary owner/neighbour structure:
-        <ASCII header>
-        N\\n
-        <N * label bytes binary>   (no parentheses)
-    """
+    """Binary labelList (owner/neighbour):  N ( <N*label bytes binary> )."""
     raw = path.read_bytes()
-    n, data_start = _find_n_and_data_start(raw, skip_paren=False)
+    n, start = _data_start(raw)
 
-    dtype    = "<i4" if label_bytes == 4 else "<i8"
+    dtype = "<i4" if label_bytes == 4 else "<i8"
     expected = n * label_bytes
-    arr_raw  = raw[data_start: data_start + expected]
-
-    if len(arr_raw) != expected:
+    if len(raw) - start < expected:
         raise ValueError(
-            f"labels: expected {expected} bytes, got {len(arr_raw)} "
-            f"(n={n}, data_start={data_start})"
+            f"labels: expected {expected} bytes, got {len(raw) - start} "
+            f"(n={n}, start={start})"
+        )
+    return np.frombuffer(raw, dtype=dtype, count=n, offset=start).astype(np.int64)
+
+
+def _read_binary_faces(path: Path, label_bytes: int = 4) -> _RaggedArray:
+    """
+    Binary OpenFOAM faceList -> CSR ``_RaggedArray``.
+
+    A ``List<face>`` is non-contiguous, so each face is serialised as a
+    ``labelList``::
+
+        N
+        (
+        <M> ( <M*label bytes binary> )
+        <M> ( <M*label bytes binary> )
+        ...
         )
 
-    return np.frombuffer(arr_raw, dtype=dtype).astype(np.int64).copy()
+    Two passes, both memory bounded:
 
-
-def _read_binary_faces(path: Path, label_bytes: int = 4) -> list[list[int]]:
+    1. Sequential scan recording, per face, its node count and the byte offset
+       of its binary blob. ``raw.find(b"(")`` only ever scans the short ASCII
+       gap between one face's ')' and the next face's '(' -- never the binary
+       blob -- so binary bytes that happen to equal '(' are never misread.
+    2. Vectorised gather of all blob bytes via a byte mask (the blob ranges are
+       disjoint, so a +1/-1 diff + cumsum marks them), then a single
+       ``view`` to the label dtype.
     """
-    Binary OpenFOAM faces structure:
-        <ASCII header>
-        N\\n
-        (\\n
-        \\n                           <- optional empty line
-        <n_pts_face_0>\\n             <- ASCII
-        [n_pts * label bytes binary] <- points of face 0
-        \\n                           <- separator
-        <n_pts_face_1>\\n
-        [n_pts * label bytes binary]
-        ...
-        )\\n
-    """
-    raw   = path.read_bytes()
-    dtype = "<i4" if label_bytes == 4 else "<i8"
+    raw = path.read_bytes()
+    nfaces, pos = _data_start(raw)
 
-    n, pos = _find_n_and_data_start(raw, skip_paren=True)
+    counts = np.empty(nfaces, dtype=np.int32)
+    offsets = np.empty(nfaces, dtype=np.int64)  # byte offset of each blob
+    find = raw.find
+    p = pos
+    for i in range(nfaces):
+        lp = find(b"(", p)  # scans only the ASCII gap
+        if lp == -1:
+            raise ValueError(f"faces: missing '(' for face {i}")
+        counts[i] = int(raw[p:lp])  # ASCII count, tolerates ws
+        blob = lp + 1
+        offsets[i] = blob
+        p = blob + int(counts[i]) * label_bytes + 1  # skip blob and ')'
 
-    faces = []
-    for _ in range(n):
-        # Skip empty lines / separators
-        while pos < len(raw):
-            nl   = raw.find(b"\n", pos)
-            if nl == -1:
-                nl = len(raw) - 1
-            line = raw[pos:nl].decode("ascii", errors="replace").strip()
-            if line and line.isdigit():
-                npts = int(line)
-                pos  = nl + 1
-                break
-            if line == ")":
-                return faces
-            pos = nl + 1
+    off = np.empty(nfaces + 1, dtype=np.int64)
+    off[0] = 0
+    np.cumsum(counts, out=off[1:])
 
-        # Read npts binary labels
-        nbytes = npts * label_bytes
-        pts    = np.frombuffer(raw[pos: pos + nbytes], dtype=dtype).tolist()
-        faces.append([int(p) for p in pts])
-        pos   += nbytes
+    nbytes = counts.astype(np.int64) * label_bytes
+    diff = np.zeros(len(raw) + 1, dtype=np.int8)
+    np.add.at(diff, offsets, 1)
+    np.add.at(diff, offsets + nbytes, -1)
+    mask = np.cumsum(diff[:-1], dtype=np.int8).astype(bool)
 
-    return faces
+    buf = np.frombuffer(raw, dtype=np.uint8)
+    conn = buf[mask].view("<i4" if label_bytes == 4 else "<i8").astype(np.int64)
+    return _RaggedArray(conn, off)
 
 
 def _strip_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    text = re.sub(r"//.*",      "",  text)
+    text = re.sub(r"//.*", "", text)
     return text
 
 
 def _skip_header(lines: list[str]) -> list[str]:
     """Remove the FoamFile { ... } block."""
     in_header = False
-    depth     = 0
-    result    = []
+    depth = 0
+    result = []
     for line in lines:
         s = line.strip()
         if "FoamFile" in s:
@@ -253,10 +261,10 @@ def _read_foam_lines(path: Path) -> list[str]:
 
 
 def _parse_points_ascii(lines: list[str]) -> np.ndarray:
-    coords   = []
+    coords = []
     in_block = False
-    n        = None
-    num      = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+    n = None
+    num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
     for line in lines:
         s = line.strip()
         if not s:
@@ -280,10 +288,10 @@ def _parse_points_ascii(lines: list[str]) -> np.ndarray:
 
 
 def _parse_faces_ascii(lines: list[str]) -> list[list[int]]:
-    faces    = []
+    faces = []
     in_block = False
-    n        = None
-    face_re  = re.compile(r"(\d+)\s*\(([^)]+)\)")
+    n = None
+    face_re = re.compile(r"(\d+)\s*\(([^)]+)\)")
     for line in lines:
         s = line.strip()
         if not s:
@@ -307,9 +315,9 @@ def _parse_faces_ascii(lines: list[str]) -> list[list[int]]:
 
 
 def _parse_int_list_ascii(lines: list[str]) -> np.ndarray:
-    tokens   = []
+    tokens = []
     in_block = False
-    n        = None
+    n = None
     for line in lines:
         s = line.strip()
         if not s:
@@ -330,7 +338,7 @@ def _parse_int_list_ascii(lines: list[str]) -> np.ndarray:
 def _parse_boundary(lines: list[str]) -> dict:
     """Returns {patch_name: {type, nFaces, startFace}}."""
     patches = {}
-    flat    = "\n".join(lines)
+    flat = "\n".join(lines)
     pattern = re.compile(r"(\w+)\s*\{([^}]*)\}", re.DOTALL)
     for match in pattern.finditer(flat):
         name = match.group(1)
@@ -340,12 +348,12 @@ def _parse_boundary(lines: list[str]) -> dict:
             m = re.search(rf"{key}\s+([^\s;]+)\s*;", body)
             return m.group(1) if m else None
 
-        n_faces    = _get("nFaces")
+        n_faces = _get("nFaces")
         start_face = _get("startFace")
         if n_faces is not None and start_face is not None:
             patches[name] = {
-                "type":      _get("type"),
-                "nFaces":    int(n_faces),
+                "type": _get("type"),
+                "nFaces": int(n_faces),
                 "startFace": int(start_face),
             }
     return patches
@@ -359,14 +367,12 @@ def _read_points(path: Path) -> np.ndarray:
     return _parse_points_ascii(_read_foam_lines(path))
 
 
-def _read_faces(path: Path) -> list[list[int]]:
+def _read_faces(path: Path) -> _RaggedArray:
     fmt, label_bytes, scalar_bytes = _detect_format(path)
     if fmt == "binary":
-        logger.info(
-            "Reading binary faces from %s (label=%d B)", path.name, label_bytes
-        )
+        logger.info("Reading binary faces from %s (label=%d B)", path.name, label_bytes)
         return _read_binary_faces(path, label_bytes)
-    return _parse_faces_ascii(_read_foam_lines(path))
+    return _RaggedArray.from_lists(_parse_faces_ascii(_read_foam_lines(path)))
 
 
 def _read_int_list(path: Path) -> np.ndarray:
@@ -382,6 +388,7 @@ def _read_int_list(path: Path) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+
 
 def _triple(a, b, c) -> float:
     """Scalar triple product a · (b × c)."""
@@ -400,21 +407,30 @@ def _node_adjacency(faces) -> dict:
     return adj
 
 
-def _build_cell_to_faces(n_cells, owner, neighbour):
+def _cell_faces_csr(n_cells, owner, neighbour) -> _RaggedArray:
     """
-    Returns cell_faces[i] = list of face ids touching cell i.
+    Vectorised cell -> faces topology as a CSR :class:`_RaggedArray`.
 
-    Handles two conventions:
-      - neighbour of length nInternalFaces (standard OpenFOAM)
-      - neighbour of length nFaces with -1 for boundary faces
+    Row ``c`` holds the ids of every face touching cell ``c``. Handles both
+    neighbour conventions: length nInternalFaces (standard OpenFOAM), or
+    length nFaces with -1 on boundary faces.
     """
-    cell_faces = [[] for _ in range(n_cells)]
-    n_nb = len(neighbour)
-    for fid in range(len(owner)):
-        cell_faces[int(owner[fid])].append(fid)
-        if fid < n_nb and neighbour[fid] >= 0:
-            cell_faces[int(neighbour[fid])].append(fid)
-    return cell_faces
+    if n_cells == 0:
+        return _RaggedArray(np.empty(0, dtype=np.int64), np.zeros(1, dtype=np.int64))
+
+    internal = neighbour >= 0
+    cell_of = np.concatenate([owner, neighbour[internal]])
+    face_of = np.concatenate(
+        [np.arange(len(owner)), np.arange(len(neighbour))[internal]]
+    )
+    order = np.argsort(cell_of, kind="stable")  # group faces by cell id
+    cf_flat = face_of[order]
+
+    fpc = np.bincount(cell_of, minlength=n_cells)
+    cf_off = np.empty(n_cells + 1, dtype=np.int64)
+    cf_off[0] = 0
+    np.cumsum(fpc, out=cf_off[1:])
+    return _RaggedArray(cf_flat, cf_off)
 
 
 def _outward_faces(cell_faces, faces, owner, cell_id):
@@ -427,9 +443,7 @@ def _outward_faces(cell_faces, faces, owner, cell_id):
     oriented = []
     for fid in cell_faces:
         f = faces[fid]
-        oriented.append(
-            list(f) if int(owner[fid]) == cell_id else list(reversed(f))
-        )
+        oriented.append(list(f) if int(owner[fid]) == cell_id else list(reversed(f)))
     return oriented
 
 
@@ -438,9 +452,9 @@ def _match_top(bottom, oriented):
     For each base node, find its unique vertical neighbour.
     Returns the ordered top ring, or None if the topology is ambiguous.
     """
-    adj  = _node_adjacency(oriented)
+    adj = _node_adjacency(oriented)
     base = set(bottom)
-    top  = []
+    top = []
     for b in bottom:
         cand = [x for x in adj[b] if x not in base]
         if len(cand) != 1:
@@ -453,8 +467,8 @@ def _build_tetra(oriented, P):
     """Build a tetrahedron connectivity with positive volume orientation."""
     base = oriented[0]
     apex = (set().union(*oriented) - set(base)).pop()
-    n    = [base[0], base[1], base[2], apex]
-    p    = [P[i] for i in n]
+    n = [base[0], base[1], base[2], apex]
+    p = [P[i] for i in n]
     if _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) < 0:
         n = [base[0], base[2], base[1], apex]
     return n
@@ -464,8 +478,8 @@ def _build_pyramid(oriented, P):
     """Build a pyramid connectivity with positive volume orientation."""
     quad = next(f for f in oriented if len(f) == 4)
     apex = (set().union(*oriented) - set(quad)).pop()
-    n    = list(quad) + [apex]
-    p    = [P[i] for i in n]
+    n = list(quad) + [apex]
+    p = [P[i] for i in n]
     if _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) < 0:
         n = [quad[0], quad[3], quad[2], quad[1], apex]
     return n
@@ -474,7 +488,7 @@ def _build_pyramid(oriented, P):
 def _build_wedge(oriented, P):
     """Build a wedge connectivity with positive volume orientation."""
     bottom = next(f for f in oriented if len(f) == 3)
-    top    = _match_top(bottom, oriented)
+    top = _match_top(bottom, oriented)
     if top is None:
         return None
     n = list(bottom) + top
@@ -487,21 +501,20 @@ def _build_wedge(oriented, P):
 def _build_hexahedron(oriented, P):
     """Build a hexahedron connectivity with positive volume orientation."""
     bottom = next(f for f in oriented if len(f) == 4)
-    top    = _match_top(bottom, oriented)
+    top = _match_top(bottom, oriented)
     if top is None:
         return None
     n = list(bottom) + top
     p = [P[i] for i in n]
     if _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) < 0:
-        n = [bottom[0], bottom[3], bottom[2], bottom[1],
-             top[0],    top[3],    top[2],    top[1]]
+        n = [bottom[0], bottom[3], bottom[2], bottom[1], top[0], top[3], top[2], top[1]]
     return n
 
 
 def _build_boundary_polygons(poly_faces, poly_tags):
     """Split boundary polygons by vertex count -> polygonN CellBlocks."""
-    by_n   = defaultdict(list)
-    tag_n  = defaultdict(list)
+    by_n = defaultdict(list)
+    tag_n = defaultdict(list)
     for f, t in zip(poly_faces, poly_tags):
         by_n[len(f)].append(list(f))
         tag_n[len(f)].append(t)
@@ -536,14 +549,14 @@ def _reconstruct_cell(oriented, P):
       - for 'polyhedron'   : connectivity is the list of outward-oriented faces
     """
     n_faces = len(oriented)
-    n_pts   = len(set().union(*oriented))
+    n_pts = len(set().union(*oriented))
 
     if n_faces == 4 and n_pts == 4:
-        return "tetra",      _build_tetra(oriented, P)
+        return "tetra", _build_tetra(oriented, P)
     if n_faces == 5 and n_pts == 5:
-        return "pyramid",    _build_pyramid(oriented, P)
+        return "pyramid", _build_pyramid(oriented, P)
     if n_faces == 5 and n_pts == 6:
-        return "wedge",      _build_wedge(oriented, P)
+        return "wedge", _build_wedge(oriented, P)
     if n_faces == 6 and n_pts == 8:
         return "hexahedron", _build_hexahedron(oriented, P)
 
@@ -552,15 +565,26 @@ def _reconstruct_cell(oriented, P):
 
 
 def _build_volume_cells(n_cells, faces, owner, neighbour, P):
-    """Build volume CellBlocks from raw polyMesh data."""
-    cell_faces_map = _build_cell_to_faces(n_cells, owner, neighbour)
+    """
+    Build volume CellBlocks from raw polyMesh data.
 
-    buckets:    dict[str, list] = {}
-    poly_cells: list            = []
+    Uses a vectorised CSR cell -> faces topology and reads each face from the
+    CSR ``_RaggedArray`` (or a plain list of faces), so peak memory stays bounded
+    even for meshes with millions of cells. The per-cell classification reuses
+    the orientation-aware reconstruction helpers unchanged.
+    """
+    cell_faces = _cell_faces_csr(n_cells, owner, neighbour)
+    owner = np.asarray(owner)
+
+    buckets: dict[str, list] = {}
+    poly_cells: list = []
     n_skipped = 0
 
-    for cell_id, cf in enumerate(cell_faces_map):
-        oriented    = _outward_faces(cf, faces, owner, cell_id)
+    for cell_id in range(n_cells):
+        oriented = [
+            list(faces[f]) if int(owner[f]) == cell_id else list(faces[f])[::-1]
+            for f in cell_faces[cell_id]
+        ]
         mtype, conn = _reconstruct_cell(oriented, P)
 
         if mtype == "polyhedron":
@@ -575,10 +599,7 @@ def _build_volume_cells(n_cells, faces, owner, neighbour, P):
     if poly_cells:
         logger.info("%d general polyhedron cell(s) found.", len(poly_cells))
 
-    cells = [
-        CellBlock(t, np.array(c, dtype=int))
-        for t, c in buckets.items()
-    ]
+    cells = [CellBlock(t, np.array(c, dtype=int)) for t, c in buckets.items()]
 
     if poly_cells:
         cells.extend(_build_polyhedra(poly_cells))
@@ -593,14 +614,14 @@ def _build_boundary_cells(boundary, faces):
     Triangles and quads  -> regular 2-D CellBlocks.
     Polygons (n > 4)     -> grouped by vertex count via _build_boundary_polygons.
     """
-    by_size:      dict[int, list] = {3: [], 4: []}
+    by_size: dict[int, list] = {3: [], 4: []}
     tags_by_size: dict[int, list] = {3: [], 4: []}
-    poly_faces:   list            = []
-    poly_tags:    list            = []
-    patch_tags:   dict            = {}
+    poly_faces: list = []
+    poly_tags: list = []
+    patch_tags: dict = {}
 
     for patch_id, (name, info) in enumerate(boundary.items()):
-        fam = -(patch_id + 1)   # MED family id (negative)
+        fam = -(patch_id + 1)  # MED family id (negative)
         patch_tags[fam] = [name]
         for fid in range(info["startFace"], info["startFace"] + info["nFaces"]):
             if fid >= len(faces):
@@ -617,7 +638,7 @@ def _build_boundary_cells(boundary, faces):
                 poly_tags.append(fam)
 
     cells: list = []
-    tags:  list = []
+    tags: list = []
 
     for size, mtype in ((3, "triangle"), (4, "quad")):
         if by_size[size]:
@@ -625,9 +646,7 @@ def _build_boundary_cells(boundary, faces):
             tags.append(np.array(tags_by_size[size], dtype=int))
 
     if poly_faces:
-        logger.info(
-            "%d boundary polygon(s) with n>4 nodes found.", len(poly_faces)
-        )
+        logger.info("%d boundary polygon(s) with n>4 nodes found.", len(poly_faces))
         poly_cells, poly_tag_arrays = _build_boundary_polygons(poly_faces, poly_tags)
         cells.extend(poly_cells)
         tags.extend(poly_tag_arrays)
@@ -638,6 +657,7 @@ def _build_boundary_cells(boundary, faces):
 # ---------------------------------------------------------------------------
 # polyMesh path resolution
 # ---------------------------------------------------------------------------
+
 
 def _resolve_polymesh(path: Path) -> Path:
     """Locate the polyMesh directory from a .foam file, case dir, or polyMesh dir."""
@@ -660,14 +680,15 @@ def _resolve_polymesh(path: Path) -> Path:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def read(filename) -> Mesh:
     """Read an OpenFOAM polyMesh case and return a :class:`meshlane.Mesh`."""
     poly = _resolve_polymesh(Path(filename))
     logger.info("Reading polyMesh from %s", poly)
 
-    points    = _read_points(poly / "points")
-    faces     = _read_faces(poly / "faces")
-    owner     = _read_int_list(poly / "owner")
+    points = _read_points(poly / "points")
+    faces = _read_faces(poly / "faces")
+    owner = _read_int_list(poly / "owner")
     neighbour = (
         _read_int_list(poly / "neighbour")
         if (poly / "neighbour").exists()
@@ -686,13 +707,14 @@ def read(filename) -> Mesh:
     )
     logger.info(
         "%d points, %d faces, %d cells, %d patches",
-        len(points), len(faces), n_cells, len(boundary),
+        len(points),
+        len(faces),
+        n_cells,
+        len(boundary),
     )
 
     vol_cells = _build_volume_cells(n_cells, faces, owner, neighbour, points)
-    patch_cells, patch_tags_data, patch_tags = _build_boundary_cells(
-        boundary, faces
-    )
+    patch_cells, patch_tags_data, patch_tags = _build_boundary_cells(boundary, faces)
 
     cells = vol_cells + patch_cells
 
@@ -704,7 +726,7 @@ def read(filename) -> Mesh:
         cells=cells,
         cell_data={"cell_tags": cell_data_tags} if cell_data_tags else {},
     )
-    mesh.cell_tags  = patch_tags
+    mesh.cell_tags = patch_tags
     mesh.point_tags = {}
     return mesh
 
