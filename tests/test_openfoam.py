@@ -10,36 +10,35 @@ import numpy as np
 import pytest
 
 from meshlane.openfoam._openfoam import (
+    _build_boundary_cells,
+    _build_boundary_polygons,
+    _build_hexahedron,
+    _build_polyhedra,
+    _build_pyramid,
+    _build_tetra,
+    _build_volume_cells,
+    _build_wedge,
+    _cell_faces_csr,
+    _data_start,
     _detect_format,
-    _find_n_and_data_start,
-    _read_binary_points,
-    _read_binary_labels,
-    _read_binary_faces,
-    _strip_comments,
-    _skip_header,
-    _read_foam_lines,
-    _parse_points_ascii,
+    _match_top,
+    _node_adjacency,
+    _outward_faces,
+    _parse_boundary,
     _parse_faces_ascii,
     _parse_int_list_ascii,
-    _parse_boundary,
-    _triple,
-    _node_adjacency,
-    _build_cell_to_faces,
-    _outward_faces,
-    _match_top,
-    _build_tetra,
-    _build_pyramid,
-    _build_wedge,
-    _build_hexahedron,
-    _build_boundary_polygons,
-    _build_polyhedra,
-    _reconstruct_cell,
-    _build_volume_cells,
-    _build_boundary_cells,
-    _resolve_polymesh,
-    _read_points,
+    _parse_points_ascii,
+    _read_binary_faces,
+    _read_binary_labels,
+    _read_binary_points,
     _read_faces,
+    _read_foam_lines,
     _read_int_list,
+    _read_points,
+    _reconstruct_cell,
+    _resolve_polymesh,
+    _strip_comments,
+    _triple,
     read,
 )
 
@@ -66,6 +65,7 @@ BINARY_HEADER = """FoamFile
 }}
 """
 
+
 def _write_ascii_points(path: Path, points: np.ndarray) -> None:
     lines = [ASCII_HEADER.format(cls="vectorField", obj="points")]
     lines.append(f"{len(points)}")
@@ -86,9 +86,7 @@ def _write_ascii_faces(path: Path, faces: list[list[int]]) -> None:
     path.write_text("\n".join(lines))
 
 
-def _write_ascii_labels(
-    path: Path, labels: list[int], obj: str = "owner"
-) -> None:
+def _write_ascii_labels(path: Path, labels: list[int], obj: str = "owner") -> None:
     lines = [ASCII_HEADER.format(cls="labelList", obj=obj)]
     lines.append(f"{len(labels)}")
     lines.append("(")
@@ -116,10 +114,19 @@ def _write_ascii_boundary(path: Path, patches: dict) -> None:
 @pytest.fixture
 def hex_cube_data():
     """A single hexahedral cell bounded by 6 quad faces."""
-    points = np.array([
-        [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-        [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-    ], dtype=float)
+    points = np.array(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 1, 1],
+        ],
+        dtype=float,
+    )
 
     faces = [
         [0, 3, 2, 1],  # bottom  (z=0)
@@ -129,12 +136,12 @@ def hex_cube_data():
         [1, 2, 6, 5],  # right   (x=1)
         [0, 4, 7, 3],  # left    (x=0)
     ]
-    owner:     list[int] = [0] * 6
+    owner: list[int] = [0] * 6
     neighbour: list[int] = []
     boundary = {
         "bottom": {"type": "wall", "nFaces": 1, "startFace": 0},
-        "top":    {"type": "wall", "nFaces": 1, "startFace": 1},
-        "sides":  {"type": "wall", "nFaces": 4, "startFace": 2},
+        "top": {"type": "wall", "nFaces": 1, "startFace": 1},
+        "sides": {"type": "wall", "nFaces": 4, "startFace": 2},
     }
     return points, faces, owner, neighbour, boundary
 
@@ -174,15 +181,13 @@ class TestStripComments:
         assert _strip_comments("") == ""
 
 
-
 class TestReadFoamLines:
     """Tests for the _read_foam_lines dispatcher."""
 
     def test_strips_comments_and_header(self, tmp_path):
         path = tmp_path / "f"
         path.write_text(
-            ASCII_HEADER.format(cls="x", obj="y")
-            + "\n// comment\n3\n(\na\nb\nc\n)\n"
+            ASCII_HEADER.format(cls="x", obj="y") + "\n// comment\n3\n(\na\nb\nc\n)\n"
         )
         lines = _read_foam_lines(path)
         # Header and comment must be gone; data lines must survive
@@ -201,7 +206,12 @@ class TestReadFoamLines:
 class TestParsePointsAscii:
     def test_basic(self):
         lines = [
-            "3", "(", "(0 0 0)", "(1.0 2.0 3.0)", "(-1 -2 -3.5e-1)", ")",
+            "3",
+            "(",
+            "(0 0 0)",
+            "(1.0 2.0 3.0)",
+            "(-1 -2 -3.5e-1)",
+            ")",
         ]
         pts = _parse_points_ascii(lines)
         assert pts.shape == (3, 3)
@@ -271,12 +281,14 @@ class TestParseIntListAscii:
 class TestParseBoundary:
     def test_basic(self):
         lines = [
-            "inlet",  "{",
+            "inlet",
+            "{",
             "    type        patch;",
             "    nFaces      10;",
             "    startFace   100;",
             "}",
-            "outlet", "{",
+            "outlet",
+            "{",
             "    type        patch;",
             "    nFaces      5;",
             "    startFace   110;",
@@ -295,7 +307,8 @@ class TestParseBoundary:
 
     def test_wall_type(self):
         lines = [
-            "wall1", "{",
+            "wall1",
+            "{",
             "    type wall;",
             "    nFaces 4;",
             "    startFace 20;",
@@ -343,51 +356,52 @@ class TestNodeAdjacency:
         assert 3 in adj[2]
 
 
-class TestBuildCellToFaces:
+class TestCellFacesCsr:
     def test_internal_and_boundary(self):
-        owner     = np.array([0, 0, 1])
-        neighbour = np.array([1])   # only the first face is internal
-        cf        = _build_cell_to_faces(2, owner, neighbour)
-        assert 0 in cf[0] and 1 in cf[0]
-        assert 0 in cf[1] and 2 in cf[1]
+        owner = np.array([0, 0, 1])
+        neighbour = np.array([1])  # only the first face is internal
+        cf = _cell_faces_csr(2, owner, neighbour)
+        assert set(cf[0].tolist()) == {0, 1}
+        assert set(cf[1].tolist()) == {0, 2}
 
     def test_with_negative_neighbour(self):
-        owner     = np.array([0, 0, 1])
+        # Face order within a cell is not meaningful; compare as sets.
+        owner = np.array([0, 0, 1])
         neighbour = np.array([1, -1, -1])
-        cf        = _build_cell_to_faces(2, owner, neighbour)
-        assert cf[0] == [0, 1]
-        assert cf[1] == [0, 2]
+        cf = _cell_faces_csr(2, owner, neighbour)
+        assert set(cf[0].tolist()) == {0, 1}
+        assert set(cf[1].tolist()) == {0, 2}
 
     def test_all_boundary(self):
-        owner     = np.array([0, 0, 0])
+        owner = np.array([0, 0, 0])
         neighbour = np.array([], dtype=int)
-        cf        = _build_cell_to_faces(1, owner, neighbour)
-        assert cf[0] == [0, 1, 2]
+        cf = _cell_faces_csr(1, owner, neighbour)
+        assert set(cf[0].tolist()) == {0, 1, 2}
 
     def test_two_cells_no_shared_face(self):
-        owner     = np.array([0, 0, 1, 1])
+        owner = np.array([0, 0, 1, 1])
         neighbour = np.array([], dtype=int)
-        cf        = _build_cell_to_faces(2, owner, neighbour)
-        assert cf[0] == [0, 1]
-        assert cf[1] == [2, 3]
+        cf = _cell_faces_csr(2, owner, neighbour)
+        assert set(cf[0].tolist()) == {0, 1}
+        assert set(cf[1].tolist()) == {2, 3}
 
 
 class TestOutwardFaces:
     def test_owner_unchanged(self):
-        faces  = [[0, 1, 2], [3, 4, 5]]
-        owner  = np.array([0, 0])
+        faces = [[0, 1, 2], [3, 4, 5]]
+        owner = np.array([0, 0])
         result = _outward_faces([0, 1], faces, owner, cell_id=0)
         assert result == [[0, 1, 2], [3, 4, 5]]
 
     def test_neighbour_reversed(self):
-        faces  = [[0, 1, 2]]
-        owner  = np.array([1])     # cell 0 is the neighbour
+        faces = [[0, 1, 2]]
+        owner = np.array([1])  # cell 0 is the neighbour
         result = _outward_faces([0], faces, owner, cell_id=0)
         assert result == [[2, 1, 0]]
 
     def test_mixed_owner_and_neighbour(self):
-        faces  = [[0, 1, 2], [3, 4, 5]]
-        owner  = np.array([0, 1])  # face 0 owned by cell 0, face 1 owned by cell 1
+        faces = [[0, 1, 2], [3, 4, 5]]
+        owner = np.array([0, 1])  # face 0 owned by cell 0, face 1 owned by cell 1
         result = _outward_faces([0, 1], faces, owner, cell_id=0)
         # face 0 : owner == 0 → unchanged
         assert result[0] == [0, 1, 2]
@@ -414,11 +428,11 @@ class TestMatchTop:
 
     def test_wedge_match(self):
         oriented = [
-            [0, 1, 2],          # bottom triangle
-            [3, 4, 5],          # top triangle
-            [0, 1, 4, 3],       # lateral quad
-            [1, 2, 5, 4],       # lateral quad
-            [2, 0, 3, 5],       # lateral quad
+            [0, 1, 2],  # bottom triangle
+            [3, 4, 5],  # top triangle
+            [0, 1, 4, 3],  # lateral quad
+            [1, 2, 5, 4],  # lateral quad
+            [2, 0, 3, 5],  # lateral quad
         ]
         top = _match_top([0, 1, 2], oriented)
         assert set(top) == {3, 4, 5}
@@ -426,9 +440,7 @@ class TestMatchTop:
 
 class TestBuildTetra:
     def test_basic(self):
-        P = np.array(
-            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
-        )
+        P = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
         oriented = [
             [0, 2, 1],
             [0, 1, 3],
@@ -443,9 +455,7 @@ class TestBuildTetra:
 
     def test_positive_volume(self):
         """Orientation must always yield positive triple product."""
-        P = np.array(
-            [[0, 0, 0], [2, 0, 0], [0, 2, 0], [0, 0, 2]], dtype=float
-        )
+        P = np.array([[0, 0, 0], [2, 0, 0], [0, 2, 0], [0, 0, 2]], dtype=float)
         oriented = [[0, 1, 2], [0, 3, 1], [1, 3, 2], [0, 2, 3]]
         conn = _build_tetra(oriented, P)
         p = [P[i] for i in conn]
@@ -454,12 +464,18 @@ class TestBuildTetra:
 
 class TestBuildPyramid:
     def test_basic(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0.5, 0.5, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0.5, 0.5, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
-            [0, 3, 2, 1],   # square base (outward = -z)
+            [0, 3, 2, 1],  # square base (outward = -z)
             [0, 1, 4],
             [1, 2, 4],
             [2, 3, 4],
@@ -470,10 +486,16 @@ class TestBuildPyramid:
         assert set(conn) == {0, 1, 2, 3, 4}
 
     def test_apex_is_last(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0.5, 0.5, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0.5, 0.5, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
             [0, 3, 2, 1],
             [0, 1, 4],
@@ -488,13 +510,20 @@ class TestBuildPyramid:
 
 class TestBuildWedge:
     def test_basic(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [0.5, 1, 0],
-            [0, 0, 1], [1, 0, 1], [0.5, 1, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0.5, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [0.5, 1, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
-            [0, 2, 1],          # bottom triangle
-            [3, 4, 5],          # top triangle
+            [0, 2, 1],  # bottom triangle
+            [3, 4, 5],  # top triangle
             [0, 1, 4, 3],
             [1, 2, 5, 4],
             [2, 0, 3, 5],
@@ -505,10 +534,17 @@ class TestBuildWedge:
         assert set(conn) == {0, 1, 2, 3, 4, 5}
 
     def test_positive_volume(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [0.5, 1, 0],
-            [0, 0, 1], [1, 0, 1], [0.5, 1, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0.5, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [0.5, 1, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
             [0, 2, 1],
             [3, 4, 5],
@@ -533,14 +569,14 @@ class TestBuildHexahedron:
     def test_positive_volume(self, hex_cube_data):
         points, faces, *_ = hex_cube_data
         conn = _build_hexahedron(faces, points)
-        p    = [points[i] for i in conn]
+        p = [points[i] for i in conn]
         assert _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) >= 0
 
     def test_ambiguous_topology_returns_none(self):
         """Degenerate face list that cannot yield a valid top ring."""
-        P         = np.zeros((8, 3))
-        ambiguous = [[0, 1, 2, 3]] * 6   # every face is identical
-        result    = _build_hexahedron(ambiguous, P)
+        P = np.zeros((8, 3))
+        ambiguous = [[0, 1, 2, 3]] * 6  # every face is identical
+        result = _build_hexahedron(ambiguous, P)
         assert result is None
 
 
@@ -553,35 +589,52 @@ class TestReconstructCell:
         assert set(conn) == set(range(8))
 
     def test_tetra(self):
-        P = np.array(
-            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
-        )
+        P = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
         oriented = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]
         mtype, conn = _reconstruct_cell(oriented, P)
         assert mtype == "tetra"
         assert len(conn) == 4
 
     def test_wedge(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [0.5, 1, 0],
-            [0, 0, 1], [1, 0, 1], [0.5, 1, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0.5, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [0.5, 1, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
-            [0, 2, 1], [3, 4, 5],
-            [0, 1, 4, 3], [1, 2, 5, 4], [2, 0, 3, 5],
+            [0, 2, 1],
+            [3, 4, 5],
+            [0, 1, 4, 3],
+            [1, 2, 5, 4],
+            [2, 0, 3, 5],
         ]
         mtype, conn = _reconstruct_cell(oriented, P)
         assert mtype == "wedge"
         assert len(conn) == 6
 
     def test_pyramid(self):
-        P = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0.5, 0.5, 1],
-        ], dtype=float)
+        P = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0.5, 0.5, 1],
+            ],
+            dtype=float,
+        )
         oriented = [
             [0, 3, 2, 1],
-            [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4],
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [3, 0, 4],
         ]
         mtype, conn = _reconstruct_cell(oriented, P)
         assert mtype == "pyramid"
@@ -589,15 +642,15 @@ class TestReconstructCell:
 
     def test_polyhedron_general(self):
         oriented = [[0, 1, 2]] * 7
-        P        = np.zeros((3, 3))
+        P = np.zeros((3, 3))
         mtype, conn = _reconstruct_cell(oriented, P)
         assert mtype == "polyhedron"
 
 
 class TestBuildBoundaryPolygons:
     def test_groups_by_size(self):
-        faces    = [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [0, 1, 2, 3, 4, 5]]
-        tags     = [-1, -1, -2]
+        faces = [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [0, 1, 2, 3, 4, 5]]
+        tags = [-1, -1, -2]
         cells, tag_arrays = _build_boundary_polygons(faces, tags)
         names = sorted(cb.type for cb in cells)
         assert "polygon5" in names
@@ -605,7 +658,7 @@ class TestBuildBoundaryPolygons:
 
     def test_single_polygon_type(self):
         faces = [[0, 1, 2, 3, 4]] * 3
-        tags  = [-1, -1, -2]
+        tags = [-1, -1, -2]
         cells, tag_arrays = _build_boundary_polygons(faces, tags)
         assert len(cells) == 1
         assert cells[0].type == "polygon5"
@@ -613,7 +666,7 @@ class TestBuildBoundaryPolygons:
 
     def test_tags_preserved(self):
         faces = [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
-        tags  = [-1, -2]
+        tags = [-1, -2]
         _, tag_arrays = _build_boundary_polygons(faces, tags)
         all_tags = np.concatenate(tag_arrays)
         assert -1 in all_tags
@@ -631,9 +684,7 @@ class TestBuildPolyhedra:
 
     def test_mixed_sizes(self):
         tet_faces = [[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]]
-        pyr_faces = [
-            [0, 1, 2, 3], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]
-        ]
+        pyr_faces = [[0, 1, 2, 3], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]
         cells = _build_polyhedra([tet_faces, pyr_faces])
         types = {cb.type for cb in cells}
         assert "polyhedron4" in types
@@ -643,11 +694,9 @@ class TestBuildPolyhedra:
 class TestBuildVolumeCells:
     def test_single_hex(self, hex_cube_data):
         points, faces, owner, neighbour, _ = hex_cube_data
-        owner_arr     = np.array(owner)
+        owner_arr = np.array(owner)
         neighbour_arr = np.array(neighbour, dtype=int)
-        cells = _build_volume_cells(
-            1, faces, owner_arr, neighbour_arr, points
-        )
+        cells = _build_volume_cells(1, faces, owner_arr, neighbour_arr, points)
         hex_blocks = [cb for cb in cells if cb.type == "hexahedron"]
         assert len(hex_blocks) == 1
         assert len(hex_blocks[0].data) == 1
@@ -658,17 +707,30 @@ class TestBuildVolumeCells:
             1, faces, np.array(owner), np.array(neighbour, dtype=int), points
         )
         from meshlane._mesh import CellBlock
+
         assert all(isinstance(cb, CellBlock) for cb in cells)
 
     def test_two_hexes(self):
         """Two hexahedral cells sharing one internal face."""
-        points = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-            [2, 0, 0], [2, 1, 0], [2, 0, 1], [2, 1, 1],
-        ], dtype=float)
+        points = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [1, 1, 1],
+                [0, 1, 1],
+                [2, 0, 0],
+                [2, 1, 0],
+                [2, 0, 1],
+                [2, 1, 1],
+            ],
+            dtype=float,
+        )
         faces = [
-            [1, 2, 6, 5],    # internal
+            [1, 2, 6, 5],  # internal
             [0, 3, 2, 1],
             [4, 5, 6, 7],
             [0, 1, 5, 4],
@@ -680,7 +742,7 @@ class TestBuildVolumeCells:
             [2, 9, 11, 6],
             [8, 10, 11, 9],
         ]
-        owner     = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+        owner = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         neighbour = np.array([1])
         cells = _build_volume_cells(2, faces, owner, neighbour, points)
         n_hex = sum(len(cb.data) for cb in cells if cb.type == "hexahedron")
@@ -712,7 +774,7 @@ class TestBuildBoundaryCells:
     def test_triangle_faces(self, tmp_path):
         """Boundary with triangle faces should produce a 'triangle' CellBlock."""
         faces = [
-            [0, 1, 2],   # triangle boundary face
+            [0, 1, 2],  # triangle boundary face
             [3, 4, 5],
         ]
         boundary = {"tri_patch": {"type": "wall", "nFaces": 2, "startFace": 0}}
@@ -733,7 +795,7 @@ class TestBuildBoundaryCells:
     def test_empty_boundary(self):
         cells, tags, patch_tags = _build_boundary_cells({}, [])
         assert cells == []
-        assert tags  == []
+        assert tags == []
         assert patch_tags == {}
 
 
@@ -774,70 +836,61 @@ class TestDetectFormat:
 
 class TestBinaryReaders:
     def test_read_binary_points(self, tmp_path):
-        pts    = np.array([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype="<f8")
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="vectorField", obj="points"
-        )
+        pts = np.array([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype="<f8")
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="vectorField", obj="points")
         path = tmp_path / "points"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n2\n")
+            f.write(b"\n2\n(")
             f.write(pts.tobytes())
         read_pts = _read_binary_points(path, scalar_bytes=8)
         np.testing.assert_allclose(read_pts, pts)
 
     def test_read_binary_labels(self, tmp_path):
         labels = np.array([0, 1, 2, 3, 4], dtype="<i4")
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="labelList", obj="owner"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="labelList", obj="owner")
         path = tmp_path / "owner"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n5\n")
+            f.write(b"\n5\n(")
             f.write(labels.tobytes())
         read_lab = _read_binary_labels(path, label_bytes=4)
         np.testing.assert_array_equal(read_lab, labels)
 
     def test_read_binary_faces(self, tmp_path):
-        header     = BINARY_HEADER.format(
-            lab=32, sca=64, cls="faceList", obj="faces"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="faceList", obj="faces")
         faces_data = [[0, 1, 2], [0, 1, 2, 3]]
-        path       = tmp_path / "faces"
+        path = tmp_path / "faces"
+        # Real OpenFOAM faceList: each face is a labelList "M ( <binary> )".
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
             f.write(b"\n2\n(\n")
             for face in faces_data:
-                f.write(f"{len(face)}\n".encode("ascii"))
+                f.write(f"{len(face)}(".encode("ascii"))
                 f.write(np.array(face, dtype="<i4").tobytes())
-                f.write(b"\n")
+                f.write(b")\n")
             f.write(b")\n")
         read_faces = _read_binary_faces(path, label_bytes=4)
-        assert read_faces == faces_data
+        assert read_faces.to_lists() == faces_data
 
     def test_read_binary_points_wrong_size(self, tmp_path):
         """Too few bytes in the file should raise ValueError."""
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="vectorField", obj="points"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="vectorField", obj="points")
         path = tmp_path / "points"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n10\n")
-            f.write(b"\x00" * 8)   # far too few bytes
+            f.write(b"\n10\n(")
+            f.write(b"\x00" * 8)  # far too few bytes
         with pytest.raises(ValueError):
             _read_binary_points(path, scalar_bytes=8)
 
     def test_read_binary_labels_wrong_size(self, tmp_path):
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="labelList", obj="owner"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="labelList", obj="owner")
         path = tmp_path / "owner"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n100\n")
-            f.write(b"\x00" * 4)   # far too few bytes
+            f.write(b"\n100\n(")
+            f.write(b"\x00" * 4)  # far too few bytes
         with pytest.raises(ValueError):
             _read_binary_labels(path, label_bytes=4)
 
@@ -846,63 +899,57 @@ class TestReadDispatchers:
     """Tests for _read_points, _read_faces, _read_int_list (format dispatchers)."""
 
     def test_read_points_ascii(self, tmp_path):
-        pts  = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]])
+        pts = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]])
         path = tmp_path / "points"
         _write_ascii_points(path, pts)
         result = _read_points(path)
         np.testing.assert_allclose(result, pts)
 
     def test_read_points_binary(self, tmp_path):
-        pts    = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="<f8")
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="vectorField", obj="points"
-        )
+        pts = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="<f8")
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="vectorField", obj="points")
         path = tmp_path / "points"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n2\n")
+            f.write(b"\n2\n(")
             f.write(pts.tobytes())
         result = _read_points(path)
         np.testing.assert_allclose(result, pts)
 
     def test_read_faces_ascii(self, tmp_path):
         faces = [[0, 1, 2], [0, 1, 2, 3]]
-        path  = tmp_path / "faces"
+        path = tmp_path / "faces"
         _write_ascii_faces(path, faces)
         result = _read_faces(path)
-        assert result == faces
+        assert result.to_lists() == faces
 
     def test_read_faces_binary(self, tmp_path):
-        header     = BINARY_HEADER.format(
-            lab=32, sca=64, cls="faceList", obj="faces"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="faceList", obj="faces")
         faces_data = [[0, 1, 2]]
-        path       = tmp_path / "faces"
+        path = tmp_path / "faces"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
             f.write(b"\n1\n(\n")
-            f.write(b"3\n")
+            f.write(b"3(")
             f.write(np.array([0, 1, 2], dtype="<i4").tobytes())
-            f.write(b"\n)\n")
+            f.write(b")\n)\n")
         result = _read_faces(path)
-        assert result == faces_data
+        assert result.to_lists() == faces_data
 
     def test_read_int_list_ascii(self, tmp_path):
         labels = [0, 1, 2, 3]
-        path   = tmp_path / "owner"
+        path = tmp_path / "owner"
         _write_ascii_labels(path, labels, "owner")
         result = _read_int_list(path)
         np.testing.assert_array_equal(result, labels)
 
     def test_read_int_list_binary(self, tmp_path):
         labels = np.array([5, 6, 7], dtype="<i4")
-        header = BINARY_HEADER.format(
-            lab=32, sca=64, cls="labelList", obj="owner"
-        )
+        header = BINARY_HEADER.format(lab=32, sca=64, cls="labelList", obj="owner")
         path = tmp_path / "owner"
         with open(path, "wb") as f:
             f.write(header.encode("ascii"))
-            f.write(b"\n3\n")
+            f.write(b"\n3\n(")
             f.write(labels.tobytes())
         result = _read_int_list(path)
         np.testing.assert_array_equal(result, labels)
@@ -994,13 +1041,14 @@ class TestPublicAPI:
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, (
-            f"meshlane.read('*.foam') failed via public API:\n{result.stderr}"
-        )
+        assert (
+            result.returncode == 0
+        ), f"meshlane.read('*.foam') failed via public API:\n{result.stderr}"
 
     def test_openfoam_read_exposed(self):
         """meshlane.openfoam.read must exist (package __init__ ran)."""
         import meshlane
+
         assert hasattr(meshlane.openfoam, "read")
 
 
@@ -1009,11 +1057,23 @@ class TestReadTwoCellMesh:
 
     @pytest.fixture
     def two_hex_case(self, tmp_path):
-        points = np.array([
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-            [2, 0, 0], [2, 1, 0], [2, 0, 1], [2, 1, 1],
-        ], dtype=float)
+        points = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [1, 1, 1],
+                [0, 1, 1],
+                [2, 0, 0],
+                [2, 1, 0],
+                [2, 0, 1],
+                [2, 1, 1],
+            ],
+            dtype=float,
+        )
 
         faces = [
             [1, 2, 6, 5],
@@ -1028,9 +1088,9 @@ class TestReadTwoCellMesh:
             [2, 9, 11, 6],
             [8, 10, 11, 9],
         ]
-        owner     = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+        owner = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
         neighbour = [1]
-        boundary  = {"walls": {"type": "wall", "nFaces": 10, "startFace": 1}}
+        boundary = {"walls": {"type": "wall", "nFaces": 10, "startFace": 1}}
 
         poly = tmp_path / "constant" / "polyMesh"
         poly.mkdir(parents=True)
@@ -1046,7 +1106,8 @@ class TestReadTwoCellMesh:
         mesh = read(two_hex_case / "case.foam")
         assert mesh.points.shape == (12, 3)
         n_vol = sum(
-            len(cb.data) for cb in mesh.cells
+            len(cb.data)
+            for cb in mesh.cells
             if cb.type in ("tetra", "pyramid", "wedge", "hexahedron")
             or cb.type.startswith("polyhedron")
         )
@@ -1066,15 +1127,13 @@ class TestReadTwoCellMesh:
 
 
 class TestRobustness:
-    def test_find_n_with_comments(self, tmp_path):
+    def test_data_start_finds_count(self, tmp_path):
         content = (
-            ASCII_HEADER.format(cls="x", obj="y")
-            + "\n// comment\n/* block */\n5\n(\ndata\n"
+            BINARY_HEADER.format(lab=32, sca=64, cls="x", obj="y") + "\n5\n(binary"
         )
         path = tmp_path / "f"
         path.write_text(content)
-        raw     = path.read_bytes()
-        n, pos  = _find_n_and_data_start(raw, skip_paren=True)
+        n, pos = _data_start(path.read_bytes())
         assert n == 5
 
     def test_parse_boundary_empty(self):
@@ -1082,12 +1141,12 @@ class TestRobustness:
 
     def test_parse_points_malformed(self):
         lines = ["1", "(", "(1 2)", ")"]
-        pts   = _parse_points_ascii(lines)
+        pts = _parse_points_ascii(lines)
         assert len(pts) == 0
 
-    def test_build_cell_to_faces_zero_cells(self):
-        cf = _build_cell_to_faces(0, np.array([], dtype=int), np.array([], dtype=int))
-        assert cf == []
+    def test_cell_faces_csr_zero_cells(self):
+        cf = _cell_faces_csr(0, np.array([], dtype=int), np.array([], dtype=int))
+        assert len(cf) == 0
 
     def test_strip_comments_only_comment(self):
         assert _strip_comments("/* entire line */").strip() == ""
@@ -1102,7 +1161,7 @@ class TestRobustness:
 
     def test_build_boundary_cells_out_of_range_face(self):
         """startFace + nFaces beyond faces list length must not crash."""
-        faces    = [[0, 1, 2, 3]]
+        faces = [[0, 1, 2, 3]]
         boundary = {"p": {"type": "wall", "nFaces": 10, "startFace": 0}}
         cells, tags, patch_tags = _build_boundary_cells(boundary, faces)
         # Only the one valid face should be included
