@@ -589,7 +589,9 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     med_mesh.attrs.create("REP", 0)  # cartesian coordinate system (repère in French)
     unt  = getattr(mesh, "unit_time", "")
     uni  = getattr(mesh, "unit_coords", "")
-    desc = getattr(mesh, "description", "Mesh created with meshlane")
+    desc = getattr(mesh, "description", None)
+    if not desc:
+        desc = "Mesh created with meshlane"
     med_mesh.attrs.create("UNT", np.bytes_(unt.encode("latin-1")) if unt else numpy_void_str)
     med_mesh.attrs.create("UNI", np.bytes_(uni.encode("latin-1")) if uni else numpy_void_str)
     med_mesh.attrs.create("SRT", 1)  # sorting type MED_SORT_ITDT
@@ -936,7 +938,7 @@ def _family_name(set_id, name):
     """Return the FAM object name corresponding to the unique set id and a list of
     subset names
     """
-    return f"FAM_{set_id}"
+    return f"FAM_{set_id}_"
 
 
 def _write_families(fm_group, tags, group_names=None):
