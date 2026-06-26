@@ -130,9 +130,8 @@ def read_buffer(f):
     point_ids = {}
     counter = 0
 
-    # cells, grouped by meshio type 
+    # cells, one block for each Abaqus *ELEMENT section
     cell_types = []            # block order = order of first appearance
-    cell_type_index = {}       # meshio type -> block index
     cell_rows = []             # per block: list of node-id rows (raw abaqus ids)
     elem_id_to_block = {}      # global element id -> block index
     elem_id_to_local = {}      # global element id -> local index within block
@@ -155,12 +154,9 @@ def read_buffer(f):
     def add_elements(cell_type, rows, elset_name):
         if not rows:
             return
-        b = cell_type_index.get(cell_type)
-        if b is None:
-            b = len(cell_types)
-            cell_type_index[cell_type] = b
-            cell_types.append(cell_type)
-            cell_rows.append([])
+        b = len(cell_types)
+        cell_types.append(cell_type)
+        cell_rows.append([])
         block = cell_rows[b]
         for r in rows:
             gid = r[0]
