@@ -124,9 +124,9 @@ def _ensure_med_families(mesh):
     (mesh.point_tags, mesh.cell_tags, point_data["point_tags"],
     cell_data["cell_tags"]) when those are not already present.
 
-    MED families use negative integers for nodes and positive integers
-    for cells (Salome / Code_Aster convention).  Family 0 is reserved
-    for entities that belong to no group.
+    MED families use positive integers for nodes and negative integers
+    for elements (MED spec / Salome / Code_Aster convention). Family 0 is
+    reserved for entities that belong to no group.
 
     A node / cell may belong to SEVERAL groups: one family is created
     per unique combination of group names (intersection handling).
@@ -155,7 +155,7 @@ def _ensure_med_families(mesh):
 
     n_points = len(mesh.points)
 
-    # point_sets → node families (negative ids) 
+    # point_sets → node families (positive ids, per MED spec)
     if not has_point_tags and mesh.point_sets:
         point_fam_array = np.zeros(n_points, dtype=np.int32)
 
@@ -168,7 +168,7 @@ def _ensure_med_families(mesh):
 
         # One family per unique combination of groups
         combo_to_fam: dict = {}
-        next_node_fam = -1  # node families: negative
+        next_node_fam = 1  # node families: positive (MED spec)
 
         for i in range(n_points):
             combo = frozenset(point_groups[i])
@@ -176,7 +176,7 @@ def _ensure_med_families(mesh):
                 continue  # family 0 — no group
             if combo not in combo_to_fam:
                 fid = next_node_fam
-                next_node_fam -= 1
+                next_node_fam += 1
                 combo_to_fam[combo] = fid
                 sorted_names = sorted(combo)
                 point_tags[fid] = sorted_names
@@ -185,7 +185,7 @@ def _ensure_med_families(mesh):
 
         point_data["point_tags"] = point_fam_array
 
-    # cell_sets → cell families (positive ids) 
+    # cell_sets → element families (negative ids, per MED spec)
     if not has_cell_tags and mesh.cell_sets:
         n_blocks = len(mesh.cells)
 
@@ -210,7 +210,7 @@ def _ensure_med_families(mesh):
                         cell_groups_map[block_idx][local_i].add(set_name)
 
         combo_to_fam_cell: dict = {}
-        next_cell_fam = 1  # cell families: positive
+        next_cell_fam = -1  # element families: negative (MED spec)
 
         for block_idx in range(n_blocks):
             n_cells_in_block = len(mesh.cells[block_idx].data)
@@ -220,7 +220,7 @@ def _ensure_med_families(mesh):
                     continue  # family 0 — no group
                 if combo not in combo_to_fam_cell:
                     fid = next_cell_fam
-                    next_cell_fam += 1
+                    next_cell_fam -= 1
                     combo_to_fam_cell[combo] = fid
                     sorted_names = sorted(combo)
                     cell_tags[fid] = sorted_names
