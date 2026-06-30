@@ -6,7 +6,6 @@ I/O for MED/Salome, cf.
 import numpy as np
 import re
 
-
 from ._med41 import FieldBitmaskWriter
 
 from .._common import num_nodes_per_cell
@@ -76,6 +75,7 @@ med_type_to_entity = {
     "POG": "MED_CELL", "POG2": "MED_CELL",
 }
 
+
 def _parse_med_field_name(name):
     """Parse 'Temperature[2] - 0.5' into ('Temperature', 2, 0.5)."""
     m = re.match(r"(.+)\[(\d+)\]\s*-\s*([0-9.eE+-]+)$", name)
@@ -116,6 +116,141 @@ def _write_field_step(
     profile_grp.attrs.create("NGA", data.shape[1] if supp == "ELNO" else 1)
     profile_grp.attrs.create("GAU", numpy_void_str)
     profile_grp.create_dataset("CO", data=data.flatten(order="F"))
+
+
+def _ensure_med_families(mesh):
+    """
+    Convert mesh.point_sets / mesh.cell_sets into MED families
+    (mesh.point_tags, mesh.cell_tags, point_data["point_tags"],
+    cell_data["cell_tags"]) when those are not already present.
+
+    MED families use positive integers for nodes and negative integers
+    for elements (MED spec / Salome / Code_Aster convention). Family 0 is
+    reserved for entities that belong to no group.
+
+    A node / cell may belong to SEVERAL groups: one family is created
+    per unique combination of group names (intersection handling).
+    """
+    # Already converted (MED → MED round-trip): nothing to do 
+    has_point_tags = (
+        hasattr(mesh, "point_tags")
+        and mesh.point_tags
+        and "point_tags" in mesh.point_data
+    )
+    has_cell_tags = (
+        hasattr(mesh, "cell_tags")
+        and mesh.cell_tags
+        and "cell_tags" in mesh.cell_data
+    )
+    if has_point_tags and has_cell_tags:
+        return mesh
+
+    # Work on shallow copies so the original mesh object is untouched
+    point_data = dict(mesh.point_data)
+    cell_data = dict(mesh.cell_data)
+    point_tags = dict(getattr(mesh, "point_tags", {}) or {})
+    cell_tags = dict(getattr(mesh, "cell_tags", {}) or {})
+    point_tag_groups = dict(getattr(mesh, "point_tag_groups", {}) or {})
+    cell_tag_groups = dict(getattr(mesh, "cell_tag_groups", {}) or {})
+
+    n_points = len(mesh.points)
+
+    # point_sets → node families (positive ids, per MED spec)
+    if not has_point_tags and mesh.point_sets:
+        point_fam_array = np.zeros(n_points, dtype=np.int32)
+
+        # Accumulate the set of group names for every point
+        point_groups: list[set] = [set() for _ in range(n_points)]
+        for set_name, indices in mesh.point_sets.items():
+            for i in np.asarray(indices, dtype=np.int64):
+                if 0 <= i < n_points:
+                    point_groups[i].add(set_name)
+
+        # One family per unique combination of groups
+        combo_to_fam: dict = {}
+        next_node_fam = 1  # node families: positive (MED spec)
+
+        for i in range(n_points):
+            combo = frozenset(point_groups[i])
+            if not combo:
+                continue  # family 0 — no group
+            if combo not in combo_to_fam:
+                fid = next_node_fam
+                next_node_fam += 1
+                combo_to_fam[combo] = fid
+                sorted_names = sorted(combo)
+                point_tags[fid] = sorted_names
+                point_tag_groups[fid] = f"FAM_{fid}"  # nom de lien court et MED-safe
+            point_fam_array[i] = combo_to_fam[combo]
+
+        point_data["point_tags"] = point_fam_array
+
+    # cell_sets → element families (negative ids, per MED spec)
+    if not has_cell_tags and mesh.cell_sets:
+        n_blocks = len(mesh.cells)
+
+        # One family-id array per cell block, initialised to 0
+        cell_fam_arrays = [
+            np.zeros(len(cb.data), dtype=np.int32) for cb in mesh.cells
+        ]
+
+        # Accumulate group names per (block_idx, local_cell_idx)
+        # cell_sets[set_name] is a list of length n_blocks;
+        # cell_sets[set_name][block_idx] is an array of local indices.
+        cell_groups_map: list[list[set]] = [
+            [set() for _ in range(len(cb.data))] for cb in mesh.cells
+        ]
+
+        for set_name, per_block in mesh.cell_sets.items():
+            for block_idx, indices in enumerate(per_block):
+                if indices is None or len(indices) == 0:
+                    continue
+                for local_i in np.asarray(indices, dtype=np.int64):
+                    if 0 <= local_i < len(cell_groups_map[block_idx]):
+                        cell_groups_map[block_idx][local_i].add(set_name)
+
+        combo_to_fam_cell: dict = {}
+        next_cell_fam = -1  # element families: negative (MED spec)
+
+        for block_idx in range(n_blocks):
+            n_cells_in_block = len(mesh.cells[block_idx].data)
+            for local_i in range(n_cells_in_block):
+                combo = frozenset(cell_groups_map[block_idx][local_i])
+                if not combo:
+                    continue  # family 0 — no group
+                if combo not in combo_to_fam_cell:
+                    fid = next_cell_fam
+                    next_cell_fam -= 1
+                    combo_to_fam_cell[combo] = fid
+                    sorted_names = sorted(combo)
+                    cell_tags[fid] = sorted_names
+                    cell_tag_groups[fid] = f"FAM_{fid}"  # nom de lien court et MED-safe
+                cell_fam_arrays[block_idx][local_i] = (
+                    combo_to_fam_cell[combo]
+                )
+
+        cell_data["cell_tags"] = cell_fam_arrays
+
+    # Rebuild the Mesh with the enriched data 
+    out = Mesh(
+        points=mesh.points,
+        cells=mesh.cells,
+        point_data=point_data,
+        cell_data=cell_data,
+        field_data=mesh.field_data,
+        point_sets=mesh.point_sets,
+        cell_sets=mesh.cell_sets,
+    )
+    out.point_tags = point_tags
+    out.cell_tags = cell_tags
+    out.point_tag_groups = point_tag_groups
+    out.cell_tag_groups = cell_tag_groups
+    out.mesh_name = getattr(mesh, "mesh_name", "mesh")
+    out.description = getattr(mesh, "description", "")
+    out.unit_time = getattr(mesh, "unit_time", "")
+    out.unit_coords = getattr(mesh, "unit_coords", "")
+    return out
+
 
 def read(filename):
     import h5py
@@ -214,9 +349,19 @@ def read(filename):
         profiles = f["PROFILS"] if "PROFILS" in f else None
         _read_data(fields, profiles, cell_types, point_data, cell_data, field_data)
 
+    # Reconstruct point_sets / cell_sets from MED families 
+    point_sets = _families_to_point_sets(point_tags, point_data.get("point_tags"))
+    cell_sets  = _families_to_cell_sets(cell_tags, cell_data.get("cell_tags"), len(cells))
+
     # Construct the mesh object
     mesh = Mesh(
-        points, cells, point_data=point_data, cell_data=cell_data, field_data=field_data
+        points,
+        cells,
+        point_data=point_data,
+        cell_data=cell_data,
+        field_data=field_data,
+        point_sets=point_sets,
+        cell_sets=cell_sets,
     )
     mesh.point_tags = point_tags
     mesh.cell_tags = cell_tags
@@ -227,6 +372,65 @@ def read(filename):
     mesh.point_tag_groups = point_tag_groups
     mesh.cell_tag_groups = cell_tag_groups
     return mesh
+
+
+def _families_to_point_sets(point_tags, fam_array):
+    """
+    Reconstruct meshio point_sets from MED family data.
+
+    point_tags : {family_id: [group_name, ...]}
+    fam_array  : int32 array of length n_points (may be None)
+    """
+    point_sets = {}
+    if fam_array is None or not point_tags:
+        return point_sets
+
+    for fid, names in point_tags.items():
+        mask = fam_array == fid
+        if not np.any(mask):
+            continue
+        indices = np.where(mask)[0]
+        for name in names:
+            if name not in point_sets:
+                point_sets[name] = indices
+            else:
+                point_sets[name] = np.unique(
+                    np.concatenate([point_sets[name], indices])
+                )
+    return point_sets
+
+
+def _families_to_cell_sets(cell_tags, fam_list, n_blocks):
+    """
+    Reconstruct meshio cell_sets from MED family data.
+
+    cell_tags : {family_id: [group_name, ...]}
+    fam_list  : list of int32 arrays, one per cell block (may be None)
+    n_blocks  : total number of cell blocks
+    """
+    cell_sets = {}
+    if fam_list is None or not cell_tags:
+        return cell_sets
+
+    for fid, names in cell_tags.items():
+        for name in names:
+            if name not in cell_sets:
+                # One empty array per block
+                cell_sets[name] = [np.array([], dtype=np.int32)] * n_blocks
+
+        for block_idx, fam_array in enumerate(fam_list):
+            mask = fam_array == fid
+            if not np.any(mask):
+                continue
+            indices = np.where(mask)[0].astype(np.int32)
+            for name in names:
+                existing = cell_sets[name][block_idx]
+                merged = np.unique(np.concatenate([existing, indices]))
+                # fam_list is a plain list — replace the slot
+                cell_sets[name] = list(cell_sets[name])
+                cell_sets[name][block_idx] = merged
+
+    return cell_sets
 
 
 def _read_data(fields, profiles, cell_types, point_data, cell_data, field_data):
@@ -310,7 +514,7 @@ def _read_cell_data(med_data, profiles):
     data_profile = med_data[profile]
     n_cells = data_profile.attrs["NBR"]
     n_gauss_points = data_profile.attrs["NGA"]
-    if profile.decode() == "MED_NO_PROFILE_INTERNAL":  # default profile with everything
+    if profile.decode() == "MED_NO_PROFILE_INTERNAL":
         values = data_profile["CO"][()].reshape(n_cells, n_gauss_points, -1, order="F")
     else:
         n_data = profiles[profile].attrs["NBR"]
@@ -359,6 +563,8 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     # compression = None
 
     # Use the specified MED version, default 4.1.0
+    h5py.get_config().track_order = True
+    mesh = _ensure_med_families(mesh)
     try:
         version_parts = [int(x) for x in med_version.split(".")]
         major = version_parts[0]
@@ -383,7 +589,9 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     med_mesh.attrs.create("REP", 0)  # cartesian coordinate system (repère in French)
     unt  = getattr(mesh, "unit_time", "")
     uni  = getattr(mesh, "unit_coords", "")
-    desc = getattr(mesh, "description", "Mesh created with meshlane")
+    desc = getattr(mesh, "description", None)
+    if not desc:
+        desc = "Mesh created with meshlane"
     med_mesh.attrs.create("UNT", np.bytes_(unt.encode("latin-1")) if unt else numpy_void_str)
     med_mesh.attrs.create("UNI", np.bytes_(uni.encode("latin-1")) if uni else numpy_void_str)
     med_mesh.attrs.create("SRT", 1)  # sorting type MED_SORT_ITDT
@@ -463,32 +671,31 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             family.attrs.create("CGT", 1)
             family.attrs.create("NBR", n_merged)
 
-    # Information about point and cell sets (familles in French)
-    fas = f.create_group("FAS")
-    families = fas.create_group(mesh_name)
-    family_zero = families.create_group("FAMILLE_ZERO")  # must be defined in any case
+    # Families (FAS group)
+    fas = f.create_group("FAS", track_order=True)
+    families = fas.create_group(mesh_name, track_order=True)
+    family_zero = families.create_group("FAMILLE_ZERO", track_order=True)
     family_zero.attrs.create("NUM", 0)
 
-    # For point tags
     try:
         if len(mesh.point_tags) > 0:
-            node = families.create_group("NOEUD")
+            node = families.create_group("NOEUD", track_order=True)
             _write_families(node, mesh.point_tags, getattr(mesh, "point_tag_groups", {}))
     except AttributeError:
         pass
 
-    # For cell tags
     try:
         if len(mesh.cell_tags) > 0:
-            element = families.create_group("ELEME")
+            element = families.create_group("ELEME", track_order=True)
             _write_families(element, mesh.cell_tags, getattr(mesh, "cell_tag_groups", {}))
     except AttributeError:
         pass
 
-    # Write nodal/cell data
-        # Fields
+    # Fields (CHA group)
     has_point_data = any(k != "point_tags" for k in mesh.point_data)
-    has_cell_data = any(k not in ("cell_tags", "gmsh:physical") for k in mesh.cell_data)
+    has_cell_data = any(
+        k not in ("cell_tags", "gmsh:physical") for k in mesh.cell_data
+    )
 
     if not has_point_data and not has_cell_data:
         f.close()
@@ -496,11 +703,11 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
     fields = f.create_group("CHA")
     field_comp_names = mesh.field_data.get("med:nom", [])
-    step_meta = mesh.field_data.get("med:step_meta", {})      
-    field_units = mesh.field_data.get("med:field_units", {})  
+    step_meta = mesh.field_data.get("med:step_meta", {})
+    field_units = mesh.field_data.get("med:field_units", {})
     name_idx = 0
 
-    # Nodal data grouped by base field name for multi-timestep support
+    # Nodal fields 
     nodal_groups = defaultdict(list)
     for name, data in mesh.point_data.items():
         if name == "point_tags":
@@ -510,19 +717,28 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
     for base_name, entries in nodal_groups.items():
         entries.sort(key=lambda x: x[0] if x[0] is not None else 0)
-        comp_name = field_comp_names[name_idx] if name_idx < len(field_comp_names) else None
+        comp_name = (
+            field_comp_names[name_idx] if name_idx < len(field_comp_names) else None
+        )
         name_idx += 1
 
         first_data = entries[0][2]
         n_components = 1 if first_data.ndim == 1 else first_data.shape[-1]
-        units = field_units.get(base_name, (numpy_void_str, numpy_void_str)) 
+        units = field_units.get(base_name, (numpy_void_str, numpy_void_str))
+
         try:
             field = fields.create_group(base_name)
             field.attrs.create("MAI", np.bytes_(mesh_name))
-            field.attrs.create("TYP", numpy_to_med_type.get(first_data.dtype, MED_FLOAT64))
+            field.attrs.create(
+                "TYP", numpy_to_med_type.get(first_data.dtype, MED_FLOAT64)
+            )
             field.attrs.create("NCO", n_components)
-            field.attrs.create("UNI", units[0] if units[0] is not None else numpy_void_str)  
-            field.attrs.create("UNT", units[1] if units[1] is not None else numpy_void_str)  
+            field.attrs.create(
+                "UNI", units[0] if units[0] is not None else numpy_void_str
+            )
+            field.attrs.create(
+                "UNT", units[1] if units[1] is not None else numpy_void_str
+            )
             nom = (
                 np.bytes_("".join(f"{n:<16}" for n in comp_name))
                 if comp_name
@@ -682,54 +898,47 @@ def _write_data(
         else:
             field.attrs.create("NOM", np.bytes_(f"{'':<16}"))
 
-        # Time-step
         step = "0000000000000000000100000000000000000001"
         time_step = field.create_group(step)
-        time_step.attrs.create("NDT", 1)  # time step 1
-        time_step.attrs.create("NOR", 1)  # iteration step 1
-        time_step.attrs.create("PDT", 0.0)  # current time
-        time_step.attrs.create("RDT", -1)  # NDT of the mesh
-        time_step.attrs.create("ROR", -1)  # NOR of the mesh
+        time_step.attrs.create("NDT", 1)
+        time_step.attrs.create("NOR", 1)
+        time_step.attrs.create("PDT", 0.0)
+        time_step.attrs.create("RDT", -1)
+        time_step.attrs.create("ROR", -1)
 
-    except ValueError:  # name already exists
+    except ValueError:
         field = fields[name]
         ts_name = list(field.keys())[-1]
         time_step = field[ts_name]
 
-    # Field information
     if supp == "NOEU":
         typ = time_step.create_group("NOE")
     elif supp == "ELNO":
         typ = time_step.create_group("NOE." + med_type)
-    else:  # 'ELEM' with only 1 Gauss points!
+    else:
         typ = time_step.create_group("MAI." + med_type)
 
-    typ.attrs.create("GAU", numpy_void_str)  # no associated Gauss points
+    typ.attrs.create("GAU", numpy_void_str)
     typ.attrs.create("PFL", np.bytes_(profile))
     profile = typ.create_group(profile)
-    profile.attrs.create("NBR", len(data))  # number of data
+    profile.attrs.create("NBR", len(data))
     if supp == "ELNO":
         profile.attrs.create("NGA", data.shape[1])
     else:
         profile.attrs.create("NGA", 1)
     profile.attrs.create("GAU", numpy_void_str)
-
-    # Dataset
     profile.create_dataset("CO", data=data.flatten(order="F"))
 
 
 def _create_component_names(n_components):
-    """To be correctly read in a MED viewer, each component must be a string of width
-    16. Since we do not know the physical nature of the data, we just use V1, V2,...
-    """
-    return [f"V{(i+1)}" for i in range(n_components)]
+    return [f"V{(i + 1)}" for i in range(n_components)]
 
 
 def _family_name(set_id, name):
     """Return the FAM object name corresponding to the unique set id and a list of
     subset names
     """
-    return "FAM_" + str(set_id) + "_" + "_".join(name)
+    return f"FAM_{set_id}_"
 
 
 def _write_families(fm_group, tags, group_names=None):
@@ -745,13 +954,19 @@ def _write_families(fm_group, tags, group_names=None):
     group_names = group_names or {}
     for set_id, name in tags.items():
         gname = group_names.get(set_id, _family_name(set_id, name))
-        family = fm_group.create_group(gname)
+        # Le nom de lien doit être un nom MED valide : pas de '/',
+        # <= MED_NAME_SIZE (64) octets. Les libellés lisibles sont
+        # stockés dans GRO/NOM, pas ici.
+        gname = gname.replace("/", "_")
+        if len(gname.encode("latin-1", "replace")) > 64:
+            gname = f"FAM_{set_id}"
+        family = fm_group.create_group(gname, track_order=True)
         family.attrs.create("NUM", set_id)
 
         if not name:
-            continue  # no groups: omit GRO entirely per MED spec
+            continue
 
-        group = family.create_group("GRO")
+        group = family.create_group("GRO", track_order=True)
         group.attrs.create("NBR", len(name))
 
         dataset = group.create_dataset(
