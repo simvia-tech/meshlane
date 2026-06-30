@@ -2,6 +2,7 @@
 I/O for Abaqus inp files.
 """
 
+import io
 import pathlib
 
 import numpy as np
@@ -9,7 +10,7 @@ import numpy as np
 from ..__about__ import __version__
 from .._common import num_nodes_per_cell
 from .._exceptions import ReadError
-from .._files import open_file
+from .._files import is_buffer, open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
 
@@ -96,9 +97,22 @@ meshio_to_abaqus_type = {v: k for k, v in abaqus_to_meshio_type.items()}
 
 def read(filename):
     """Reads a Abaqus inp file."""
-    with open_file(filename, "r") as f:
-        out = read_buffer(f)
-    return out
+    # A passed-in buffer is read as-is.
+    if is_buffer(filename, "r"):
+        return read_buffer(filename)
+    # For a path, decode with an encoding fallback so industrial .inp files
+    # written in cp1252 (e.g. accented set names) are handled. This is done
+    # here, not in the shared open_file, so binary readers that rely on a real
+    # file descriptor (np.fromfile) keep working.
+    with open(filename, "rb") as fb:
+        raw = fb.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    buf = io.StringIO(text)
+    buf.name = str(filename)  # needed to resolve relative *INCLUDE paths
+    return read_buffer(buf)
 
 
 def _build_id_resolver(id_map):
@@ -215,7 +229,7 @@ def read_buffer(f):
             # There are just too many Abaqus keywords to explicitly skip them.
             line = f.readline()
 
-    # finalize points & cells 
+    # finalize points & cells
     points = np.asarray(points, dtype=float)
     node_keys, node_vals = _build_id_resolver(point_ids)
 
@@ -225,7 +239,7 @@ def read_buffer(f):
         cells.append(CellBlock(ctype, _resolve(node_keys, node_vals, raw)))
     n_blocks = len(cells)
 
-    #  helper: list of element ids -> per-block local-index arrays 
+    #  helper: list of element ids -> per-block local-index arrays
     def distribute(gids):
         per_block = [[] for _ in range(n_blocks)]
         for gid in gids:
@@ -241,7 +255,7 @@ def read_buffer(f):
     for name, gids in elset_numeric.items():
         elset_gids.setdefault(name, []).extend(int(g) for g in gids)
 
-    # resolve cell sets in definition order (for by-name references) 
+    # resolve cell sets in definition order (for by-name references)
     ci_resolved = {}  # UPPER name -> stored name
     for name in elset_order:
         if name in elset_byname and name not in elset_gids:
@@ -260,11 +274,11 @@ def read_buffer(f):
             cell_sets[name] = distribute(elset_gids.get(name, []))
         ci_resolved[name.upper()] = name
 
-    #  node sets 
+    #  node sets
     for name, set_ids in point_sets_raw.items():
         point_sets[name] = _resolve(node_keys, node_vals, set_ids).astype("int32")
 
-    # merge any *INCLUDE meshes 
+    # merge any *INCLUDE meshes
     for out in included:
         points, cells = merge(out, points, cells, point_sets)
     if len(cells) > n_blocks:
