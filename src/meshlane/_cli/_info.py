@@ -17,6 +17,23 @@ def add_args(parser):
 
 
 def info(args):
+
+    # Detect multi-mesh MED files 
+    if args.infile.endswith(".med"):
+        import h5py
+        with h5py.File(args.infile, "r") as f:
+            mesh_names = list(f["ENS_MAA"].keys())
+        
+        if len(mesh_names) > 1:
+            from meshlane.med._medmulti import read_med_multi
+            meshes, names = read_med_multi(args.infile)
+            for mesh, name in zip(meshes, names):
+                print(f"\n{'='*40}")
+                print(f"  Maillage : '{name}'")
+                print(f"{'='*40}")
+                print(mesh)
+            return
+
     # read mesh data
     mesh = read(args.infile, file_format=args.input_format)
     print(mesh)
