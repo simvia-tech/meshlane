@@ -1358,3 +1358,49 @@ def test_med_multi_hdf5_structure(tmp_path):
         assert "alpha" in f["FAS"], "alpha must be in FAS"
         assert "beta" in f["FAS"], "beta must be in FAS"
         assert "INFOS_GENERALES" in f, "INFOS_GENERALES must exist"
+
+
+def test_med_node_perm_matches_medcoupling_faces():
+    """The meshio<->MED 3D node permutations must produce valid MED cells:
+    after permutation, every face defined by MEDCoupling's INTERP_KERNEL cell
+    model (CellModel.cxx) must have an outward normal. This pins the ordering
+    to the authoritative MED source, independent of any reference .med file."""
+    from meshlane.med._med import _med_node_perm
+
+    # reference cells in meshio/VTK ordering
+    ref = {
+        "tetra": (
+            np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float),
+            [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]],
+        ),
+        "pyramid": (
+            np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0.5, 0.5, 1]], float),
+            [[0, 1, 2, 3], [0, 4, 1], [1, 4, 2], [2, 4, 3], [3, 4, 0]],
+        ),
+        "wedge": (
+            np.array(
+                [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1]], float
+            ),
+            [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]],
+        ),
+        "hexahedron": (
+            np.array(
+                [
+                    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                    [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+                ],
+                float,
+            ),
+            [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
+             [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]],
+        ),
+    }
+    for cell_type, (pts, med_faces) in ref.items():
+        h = pts[_med_node_perm[cell_type]]
+        centroid = h.mean(axis=0)
+        for f in med_faces:
+            fp = h[f]
+            normal = np.cross(fp[1] - fp[0], fp[2] - fp[0])
+            assert np.dot(normal, fp.mean(axis=0) - centroid) > 0, (
+                f"{cell_type} face {f} not outward after permutation"
+            )

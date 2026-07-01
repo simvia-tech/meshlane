@@ -38,14 +38,15 @@ meshio_to_med_type = {
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 
-# meshio uses VTK (positive-orientation) node ordering for 3D cells; MED/Salome
-# use the opposite orientation (verified against real .med files: the element
-# corner Jacobian is negative in MED, positive in meshio). These
-# structure-preserving, self-inverse permutations convert between the two.
-# Applied on BOTH read and write, so the in-memory mesh stays in meshio
-# convention and MED->MED round-trips are the identity, while meshio->MED output
-# (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such as
-# Salome and code_saturne.
+# meshio uses VTK node ordering for 3D cells; MED uses the same node structure
+# but the opposite orientation (winding). These structure-preserving,
+# self-inverse permutations convert meshio <-> MED. They are derived so that,
+# after permutation, every face defined by MEDCoupling's INTERP_KERNEL cell model
+# (SalomePlatform/medcoupling, CellModel.cxx) has an outward normal -- i.e. a
+# valid MED cell. Applied on BOTH read and write, so the in-memory mesh stays in
+# meshio convention and MED->MED round-trips are the identity, while meshio->MED
+# output (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such
+# as Salome and code_saturne.
 _med_node_perm = {
     "tetra": [0, 1, 3, 2],
     "pyramid": [0, 3, 2, 1, 4],
