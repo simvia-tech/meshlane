@@ -8,7 +8,7 @@ import re
 
 from ._med41 import FieldBitmaskWriter
 
-from .._common import num_nodes_per_cell
+from .._common import num_nodes_per_cell, warn
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
 from collections import defaultdict
@@ -37,6 +37,56 @@ meshio_to_med_type = {
     "polygon2": "POG2",
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
+
+# meshlane uses VTK node ordering for 3D cells; MED uses the same node structure
+# but the opposite orientation (winding). These structure-preserving,
+# self-inverse permutations convert meshlane (VTK) <-> MED. They are derived so
+# that after permutation, every face defined by MEDCoupling's INTERP_KERNEL model
+# (SalomePlatform/medcoupling, CellModel.cxx) has an outward normal -- i.e. a
+# valid MED cell. Applied on BOTH read and write, so the in-memory mesh stays in
+# meshlane convention and MED->MED round-trips are the identity, while meshlane->MED
+# output (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such
+# as Salome and code_saturne.
+_med_node_perm = {
+    "tetra": [0, 1, 3, 2],
+    "pyramid": [0, 3, 2, 1, 4],
+    "wedge": [3, 4, 5, 0, 1, 2],
+    "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
+}
+
+# Quadratic 3D types have the same meshlane<->MED orientation difference, but their
+# permutations (corners + edge-midpoints) are not implemented yet, so they are
+# left unconverted in both directions (read and write) and may be mis-oriented.
+_med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
+
+
+def _warn_unconverted_3d(cell_type):
+    """Warn that a quadratic 3D cell type is being read or written without the
+    meshlane <-> MED node-ordering conversion (not implemented for these types
+    yet), so it may be mis-oriented. Called on both read and write."""
+    if cell_type in _med_unconverted_3d:
+        warn(
+            f"MED: orientation conversion for quadratic 3D cells '{cell_type}' is "
+            "not yet implemented. These cells may be mis-oriented for MED tools "
+            "(Salome, code_saturne, code_aster, etc.)."
+        )
+
+
+def _reorder_med_cells(cell_type, data):
+    """Apply the self-inverse meshlane <-> MED node permutation to a (n, k) cell
+    array (no-op for types not in ``_med_node_perm``). Shared by the reader and
+    both writers (single-mesh and multi-mesh) so the paths cannot drift."""
+    perm = _med_node_perm.get(cell_type)
+    return data[:, perm] if perm is not None else data
+
+
+def _med_cells_for_write(cell_type, data):
+    """Like :func:`_reorder_med_cells`, for the write paths: additionally warn
+    for unconverted quadratic 3D types."""
+    _warn_unconverted_3d(cell_type)
+    return _reorder_med_cells(cell_type, data)
+
+
 numpy_void_str = np.bytes_("")
 
 MED_FLOAT32 = 4
@@ -325,7 +375,10 @@ def read(filename):
         else:
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
-            cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
+            data = nod[()].reshape(n_cells, -1, order="F") - 1
+            _warn_unconverted_3d(cell_type)
+            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
+            cells += [(cell_type, data)]
 
         # Cell tags
         if "FAM" in med_cell_type_group:
@@ -659,6 +712,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         else:
             # Merge cells of the same type
             merged_cells = np.concatenate(cells_list, axis=0)
+            merged_cells = _med_cells_for_write(cell_type, merged_cells)  # meshlane -> MED
             nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
             nod.attrs.create("CGT", 1)
             nod.attrs.create("NBR", len(merged_cells))

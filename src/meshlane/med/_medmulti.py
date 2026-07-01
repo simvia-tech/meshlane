@@ -34,6 +34,9 @@ from ._med import (
     numpy_to_med_type,
     numpy_void_str,
     MED_FLOAT64,
+    _med_cells_for_write,
+    _reorder_med_cells,
+    _warn_unconverted_3d,
     _write_families,
     _read_families,
     _read_data,
@@ -342,6 +345,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
                 n_merged = len(all_polygons)
             else:
                 merged_cells = np.concatenate(cells_list, axis=0)
+                merged_cells = _med_cells_for_write(cell_type, merged_cells)
                 nod = med_cells.create_dataset(
                     "NOD", data=merged_cells.flatten(order="F") + 1
                 )
@@ -475,7 +479,10 @@ def _read_single_mesh(f, name):
         else:
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
-            cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
+            data = nod[()].reshape(n_cells, -1, order="F") - 1
+            _warn_unconverted_3d(cell_type)
+            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
+            cells += [(cell_type, data)]
 
         if "FAM" in med_cell_type_group:
             cell_data.setdefault("cell_tags", []).append(
