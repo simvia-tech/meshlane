@@ -37,6 +37,22 @@ meshio_to_med_type = {
     "polygon2": "POG2",
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
+
+# meshio uses VTK (positive-orientation) node ordering for 3D cells; MED/Salome
+# use the opposite orientation (verified against real .med files: the element
+# corner Jacobian is negative in MED, positive in meshio). These
+# structure-preserving, self-inverse permutations convert between the two.
+# Applied on BOTH read and write, so the in-memory mesh stays in meshio
+# convention and MED->MED round-trips are the identity, while meshio->MED output
+# (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such as
+# Salome and code_saturne.
+_med_node_perm = {
+    "tetra": [0, 1, 3, 2],
+    "pyramid": [0, 3, 2, 1, 4],
+    "wedge": [3, 4, 5, 0, 1, 2],
+    "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
+}
+
 numpy_void_str = np.bytes_("")
 
 MED_FLOAT32 = 4
@@ -325,7 +341,11 @@ def read(filename):
         else:
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
-            cells += [(cell_type, nod[()].reshape(n_cells, -1, order="F") - 1)]
+            data = nod[()].reshape(n_cells, -1, order="F") - 1
+            perm = _med_node_perm.get(cell_type)
+            if perm is not None:  # MED -> meshio node order (orientation)
+                data = data[:, perm]
+            cells += [(cell_type, data)]
 
         # Cell tags
         if "FAM" in med_cell_type_group:
@@ -659,6 +679,9 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         else:
             # Merge cells of the same type
             merged_cells = np.concatenate(cells_list, axis=0)
+            perm = _med_node_perm.get(cell_type)
+            if perm is not None:  # meshio -> MED node order (orientation)
+                merged_cells = merged_cells[:, perm]
             nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
             nod.attrs.create("CGT", 1)
             nod.attrs.create("NBR", len(merged_cells))
