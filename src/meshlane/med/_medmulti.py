@@ -36,6 +36,7 @@ from ._med import (
     MED_FLOAT64,
     _med_cells_for_write,
     _reorder_med_cells,
+    _warn_unconverted_3d,
     _write_families,
     _read_families,
     _read_data,
@@ -479,6 +480,7 @@ def _read_single_mesh(f, name):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
+            _warn_unconverted_3d(cell_type)
             data = _reorder_med_cells(cell_type, data)  # MED -> meshio order
             cells += [(cell_type, data)]
 

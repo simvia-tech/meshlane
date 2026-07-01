@@ -55,9 +55,21 @@ _med_node_perm = {
 }
 
 # Quadratic 3D types have the same meshio<->MED orientation difference, but their
-# permutations (corners + edge-midpoints) are not implemented yet. They are
-# written without conversion and so may be mis-oriented for MED readers; warn.
+# permutations (corners + edge-midpoints) are not implemented yet, so they are
+# left unconverted in both directions (read and write) and may be mis-oriented.
 _med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
+
+
+def _warn_unconverted_3d(cell_type):
+    """Warn that a quadratic 3D cell type is being read or written without the
+    meshio <-> MED node-ordering conversion (not implemented for these types
+    yet), so it may be mis-oriented. Called on both read and write."""
+    if cell_type in _med_unconverted_3d:
+        warn(
+            f"MED: orientation conversion for quadratic 3D cells '{cell_type}' is "
+            "not yet implemented. These cells may be mis-oriented for MED tools "
+            "(Salome, code_saturne, code_aster, etc.)."
+        )
 
 
 def _reorder_med_cells(cell_type, data):
@@ -70,13 +82,8 @@ def _reorder_med_cells(cell_type, data):
 
 def _med_cells_for_write(cell_type, data):
     """Like :func:`_reorder_med_cells`, for the write paths: additionally warn
-    when a quadratic 3D type is written without orientation conversion."""
-    if cell_type in _med_unconverted_3d:
-        warn(
-            f"MED: quadratic 3D cells '{cell_type}' are not yet written with the "
-            "meshio->MED orientation conversion and may be mis-oriented for MED "
-            "readers (Salome, code_saturne, code_aster, etc.)."
-        )
+    for unconverted quadratic 3D types."""
+    _warn_unconverted_3d(cell_type)
     return _reorder_med_cells(cell_type, data)
 
 
@@ -369,6 +376,7 @@ def read(filename):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
+            _warn_unconverted_3d(cell_type)
             data = _reorder_med_cells(cell_type, data)  # MED -> meshio order
             cells += [(cell_type, data)]
 

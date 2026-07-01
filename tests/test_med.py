@@ -1426,3 +1426,45 @@ def test_identity_perm_is_not_med_orientation():
             f"{cell_type}: identity permutation unexpectedly passed the MED "
             "outward-face check (the check is not discriminating)"
         )
+
+
+def test_med_multi_3d_orientation_and_roundtrip(tmp_path):
+    """Multi-mesh MED: 3D cells are written in MED orientation, and the
+    multi-mesh reader applies the inverse permutation so a write->read round-trip
+    is identity. Exercises the multi-mesh write AND read directions."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    pts = np.array(
+        [
+            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+        ],
+        float,
+    )
+    hexa = np.array([[0, 1, 2, 3, 4, 5, 6, 7]])  # meshio (positive) order
+    m1 = Mesh(pts, [CellBlock("hexahedron", hexa.copy())])
+    m2 = Mesh(pts + 2.0, [CellBlock("hexahedron", hexa.copy())])
+
+    filename = tmp_path / "multi.med"
+    meshlane.med.write_med_multi(filename, [m1, m2], mesh_names=["a", "b"])
+
+    # on-disk: hexes are in MED (negative-orientation) order for BOTH meshes
+    def corner_jac(conn, P):
+        return float(
+            np.dot(P[conn[1]] - P[conn[0]],
+                   np.cross(P[conn[3]] - P[conn[0]], P[conn[4]] - P[conn[0]]))
+        )
+
+    with h5py.File(filename, "r") as f:
+        for name, P in (("a", pts), ("b", pts + 2.0)):
+            m = f["ENS_MAA"][name]
+            if "NOE" not in m:
+                m = m[list(m.keys())[0]]
+            conn = m["MAI"]["HE8"]["NOD"][()].reshape(1, -1, order="F") - 1
+            assert corner_jac(conn[0], P) < 0, f"{name}: hex not MED-oriented on disk"
+
+    # multi-mesh read applies the inverse perm -> round-trip identity
+    meshes, names = meshlane.med.read_med_multi(filename)
+    by_name = dict(zip(names, meshes))
+    for name, orig in (("a", m1), ("b", m2)):
+        np.testing.assert_array_equal(orig.cells[0].data, by_name[name].cells[0].data)
