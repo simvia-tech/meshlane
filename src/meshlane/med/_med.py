@@ -8,7 +8,7 @@ import re
 
 from ._med41 import FieldBitmaskWriter
 
-from .._common import num_nodes_per_cell
+from .._common import num_nodes_per_cell, warn
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
 from collections import defaultdict
@@ -53,6 +53,32 @@ _med_node_perm = {
     "wedge": [3, 4, 5, 0, 1, 2],
     "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
 }
+
+# Quadratic 3D types have the same meshio<->MED orientation difference, but their
+# permutations (corners + edge-midpoints) are not implemented yet. They are
+# written without conversion and so may be mis-oriented for MED readers; warn.
+_med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
+
+
+def _reorder_med_cells(cell_type, data):
+    """Apply the self-inverse meshio <-> MED node permutation to a (n, k) cell
+    array (no-op for types not in ``_med_node_perm``). Shared by the reader and
+    both writers (single-mesh and multi-mesh) so the paths cannot drift."""
+    perm = _med_node_perm.get(cell_type)
+    return data[:, perm] if perm is not None else data
+
+
+def _med_cells_for_write(cell_type, data):
+    """Like :func:`_reorder_med_cells`, for the write paths: additionally warn
+    when a quadratic 3D type is written without orientation conversion."""
+    if cell_type in _med_unconverted_3d:
+        warn(
+            f"MED: quadratic 3D cells '{cell_type}' are not yet written with the "
+            "meshio->MED orientation conversion and may be mis-oriented for MED "
+            "readers (Salome, code_saturne, code_aster, etc.)."
+        )
+    return _reorder_med_cells(cell_type, data)
+
 
 numpy_void_str = np.bytes_("")
 
@@ -343,9 +369,7 @@ def read(filename):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
-            perm = _med_node_perm.get(cell_type)
-            if perm is not None:  # MED -> meshio node order (orientation)
-                data = data[:, perm]
+            data = _reorder_med_cells(cell_type, data)  # MED -> meshio order
             cells += [(cell_type, data)]
 
         # Cell tags
@@ -680,9 +704,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         else:
             # Merge cells of the same type
             merged_cells = np.concatenate(cells_list, axis=0)
-            perm = _med_node_perm.get(cell_type)
-            if perm is not None:  # meshio -> MED node order (orientation)
-                merged_cells = merged_cells[:, perm]
+            merged_cells = _med_cells_for_write(cell_type, merged_cells)  # meshio -> MED
             nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
             nod.attrs.create("CGT", 1)
             nod.attrs.create("NBR", len(merged_cells))

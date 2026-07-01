@@ -1360,47 +1360,69 @@ def test_med_multi_hdf5_structure(tmp_path):
         assert "INFOS_GENERALES" in f, "INFOS_GENERALES must exist"
 
 
+# Reference cells in meshio/VTK ordering + the MED (MEDCoupling INTERP_KERNEL
+# CellModel.cxx) face definitions for each 3D type.
+_MED_ORIENT_REF = {
+    "tetra": (
+        np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float),
+        [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]],
+    ),
+    "pyramid": (
+        np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0.5, 0.5, 1]], float),
+        [[0, 1, 2, 3], [0, 4, 1], [1, 4, 2], [2, 4, 3], [3, 4, 0]],
+    ),
+    "wedge": (
+        np.array(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1]], float
+        ),
+        [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]],
+    ),
+    "hexahedron": (
+        np.array(
+            [
+                [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+            ],
+            float,
+        ),
+        [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
+         [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]],
+    ),
+}
+
+
+def _all_med_faces_outward(pts, perm, med_faces):
+    """True iff, after applying ``perm``, every MED-defined face points outward."""
+    h = pts[perm]
+    centroid = h.mean(axis=0)
+    for f in med_faces:
+        fp = h[f]
+        normal = np.cross(fp[1] - fp[0], fp[2] - fp[0])
+        if np.dot(normal, fp.mean(axis=0) - centroid) <= 0:
+            return False
+    return True
+
+
 def test_med_node_perm_matches_medcoupling_faces():
-    """The meshio<->MED 3D node permutations must produce valid MED cells:
-    after permutation, every face defined by MEDCoupling's INTERP_KERNEL cell
-    model (CellModel.cxx) must have an outward normal. This pins the ordering
-    to the authoritative MED source, independent of any reference .med file."""
+    """The meshio<->MED 3D node permutations must produce valid MED cells: after
+    permutation, every face defined by MEDCoupling's INTERP_KERNEL cell model
+    (CellModel.cxx) must point outward. Pins the ordering to the authoritative
+    MED source, independent of any reference .med file."""
     from meshlane.med._med import _med_node_perm
 
-    # reference cells in meshio/VTK ordering
-    ref = {
-        "tetra": (
-            np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float),
-            [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]],
-        ),
-        "pyramid": (
-            np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0.5, 0.5, 1]], float),
-            [[0, 1, 2, 3], [0, 4, 1], [1, 4, 2], [2, 4, 3], [3, 4, 0]],
-        ),
-        "wedge": (
-            np.array(
-                [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1]], float
-            ),
-            [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]],
-        ),
-        "hexahedron": (
-            np.array(
-                [
-                    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-                    [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-                ],
-                float,
-            ),
-            [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
-             [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]],
-        ),
-    }
-    for cell_type, (pts, med_faces) in ref.items():
-        h = pts[_med_node_perm[cell_type]]
-        centroid = h.mean(axis=0)
-        for f in med_faces:
-            fp = h[f]
-            normal = np.cross(fp[1] - fp[0], fp[2] - fp[0])
-            assert np.dot(normal, fp.mean(axis=0) - centroid) > 0, (
-                f"{cell_type} face {f} not outward after permutation"
-            )
+    for cell_type, (pts, med_faces) in _MED_ORIENT_REF.items():
+        assert _all_med_faces_outward(pts, _med_node_perm[cell_type], med_faces), (
+            f"{cell_type}: MED faces not all outward after permutation"
+        )
+
+
+def test_identity_perm_is_not_med_orientation():
+    """Negative control: the identity permutation must NOT yield valid MED cells.
+    Guards against a future change silently dropping a permutation to
+    [0, 1, 2, ...] (meshio order), which would still be wrong for MED."""
+    for cell_type, (pts, med_faces) in _MED_ORIENT_REF.items():
+        identity = list(range(len(pts)))
+        assert not _all_med_faces_outward(pts, identity, med_faces), (
+            f"{cell_type}: identity permutation unexpectedly passed the MED "
+            "outward-face check (the check is not discriminating)"
+        )
