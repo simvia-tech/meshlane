@@ -38,13 +38,13 @@ meshio_to_med_type = {
 }
 med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 
-# meshio uses VTK node ordering for 3D cells; MED uses the same node structure
+# meshlane uses VTK node ordering for 3D cells; MED uses the same node structure
 # but the opposite orientation (winding). These structure-preserving,
-# self-inverse permutations convert meshio <-> MED. They are derived so that,
-# after permutation, every face defined by MEDCoupling's INTERP_KERNEL cell model
+# self-inverse permutations convert meshlane (VTK) <-> MED. They are derived so
+# that after permutation, every face defined by MEDCoupling's INTERP_KERNEL model
 # (SalomePlatform/medcoupling, CellModel.cxx) has an outward normal -- i.e. a
 # valid MED cell. Applied on BOTH read and write, so the in-memory mesh stays in
-# meshio convention and MED->MED round-trips are the identity, while meshio->MED
+# meshlane convention and MED->MED round-trips are the identity, while meshlane->MED
 # output (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such
 # as Salome and code_saturne.
 _med_node_perm = {
@@ -54,7 +54,7 @@ _med_node_perm = {
     "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
 }
 
-# Quadratic 3D types have the same meshio<->MED orientation difference, but their
+# Quadratic 3D types have the same meshlane<->MED orientation difference, but their
 # permutations (corners + edge-midpoints) are not implemented yet, so they are
 # left unconverted in both directions (read and write) and may be mis-oriented.
 _med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
@@ -62,7 +62,7 @@ _med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
 
 def _warn_unconverted_3d(cell_type):
     """Warn that a quadratic 3D cell type is being read or written without the
-    meshio <-> MED node-ordering conversion (not implemented for these types
+    meshlane <-> MED node-ordering conversion (not implemented for these types
     yet), so it may be mis-oriented. Called on both read and write."""
     if cell_type in _med_unconverted_3d:
         warn(
@@ -73,7 +73,7 @@ def _warn_unconverted_3d(cell_type):
 
 
 def _reorder_med_cells(cell_type, data):
-    """Apply the self-inverse meshio <-> MED node permutation to a (n, k) cell
+    """Apply the self-inverse meshlane <-> MED node permutation to a (n, k) cell
     array (no-op for types not in ``_med_node_perm``). Shared by the reader and
     both writers (single-mesh and multi-mesh) so the paths cannot drift."""
     perm = _med_node_perm.get(cell_type)
@@ -377,7 +377,7 @@ def read(filename):
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
             _warn_unconverted_3d(cell_type)
-            data = _reorder_med_cells(cell_type, data)  # MED -> meshio order
+            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
             cells += [(cell_type, data)]
 
         # Cell tags
@@ -712,7 +712,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         else:
             # Merge cells of the same type
             merged_cells = np.concatenate(cells_list, axis=0)
-            merged_cells = _med_cells_for_write(cell_type, merged_cells)  # meshio -> MED
+            merged_cells = _med_cells_for_write(cell_type, merged_cells)  # meshlane -> MED
             nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
             nod.attrs.create("CGT", 1)
             nod.attrs.create("NBR", len(merged_cells))

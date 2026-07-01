@@ -1360,7 +1360,7 @@ def test_med_multi_hdf5_structure(tmp_path):
         assert "INFOS_GENERALES" in f, "INFOS_GENERALES must exist"
 
 
-# Reference cells in meshio/VTK ordering + the MED (MEDCoupling INTERP_KERNEL
+# Reference cells in meshlane (VTK) ordering + the MED (MEDCoupling INTERP_KERNEL
 # CellModel.cxx) face definitions for each 3D type.
 _MED_ORIENT_REF = {
     "tetra": (
@@ -1404,7 +1404,7 @@ def _all_med_faces_outward(pts, perm, med_faces):
 
 
 def test_med_node_perm_matches_medcoupling_faces():
-    """The meshio<->MED 3D node permutations must produce valid MED cells: after
+    """The meshlane<->MED 3D node permutations must produce valid MED cells: after
     permutation, every face defined by MEDCoupling's INTERP_KERNEL cell model
     (CellModel.cxx) must point outward. Pins the ordering to the authoritative
     MED source, independent of any reference .med file."""
@@ -1419,7 +1419,7 @@ def test_med_node_perm_matches_medcoupling_faces():
 def test_identity_perm_is_not_med_orientation():
     """Negative control: the identity permutation must NOT yield valid MED cells.
     Guards against a future change silently dropping a permutation to
-    [0, 1, 2, ...] (meshio order), which would still be wrong for MED."""
+    [0, 1, 2, ...] (meshlane order), which would still be wrong for MED."""
     for cell_type, (pts, med_faces) in _MED_ORIENT_REF.items():
         identity = list(range(len(pts)))
         assert not _all_med_faces_outward(pts, identity, med_faces), (
@@ -1441,7 +1441,7 @@ def test_med_multi_3d_orientation_and_roundtrip(tmp_path):
         ],
         float,
     )
-    hexa = np.array([[0, 1, 2, 3, 4, 5, 6, 7]])  # meshio (positive) order
+    hexa = np.array([[0, 1, 2, 3, 4, 5, 6, 7]])  # meshlane (positive) order
     m1 = Mesh(pts, [CellBlock("hexahedron", hexa.copy())])
     m2 = Mesh(pts + 2.0, [CellBlock("hexahedron", hexa.copy())])
 
