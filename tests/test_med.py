@@ -1468,3 +1468,87 @@ def test_med_multi_3d_orientation_and_roundtrip(tmp_path):
     by_name = dict(zip(names, meshes))
     for name, orig in (("a", m1), ("b", m2)):
         np.testing.assert_array_equal(orig.cells[0].data, by_name[name].cells[0].data)
+
+
+def test_gmsh_physical_groups_written_as_med_families(tmp_path):
+    """Gmsh stores groups as cell_data["gmsh:physical"] (an integer id per
+    cell), not as cell_sets. The MED writer must bridge these into MED
+    families/groups, otherwise a .msh -> .med conversion drops all groups.
+    Here two blocks carry distinct physical ids and no names -> fallback
+    "group_<id>" labels."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    pts = np.array(
+        [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]], float
+    )
+    cells = [
+        CellBlock("line", np.array([[0, 1], [1, 2]])),
+        CellBlock("quad", np.array([[0, 1, 4, 3], [1, 2, 5, 4]])),
+    ]
+    cell_data = {"gmsh:physical": [np.array([200, 300]), np.array([100, 100])]}
+    mesh = Mesh(pts, cells, cell_data=cell_data)
+
+    filename = tmp_path / "phys.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    # every physical id became a group with the right cells
+    assert set(back.cell_sets) == {"group_100", "group_200", "group_300"}
+    # group_100 -> both quads (block 1); group_200/300 -> one line each (block 0)
+    np.testing.assert_array_equal(back.cell_sets["group_100"][1], [0, 1])
+    np.testing.assert_array_equal(back.cell_sets["group_200"][0], [0])
+    np.testing.assert_array_equal(back.cell_sets["group_300"][0], [1])
+
+
+def test_gmsh_physical_groups_use_field_data_names(tmp_path):
+    """When the .msh had $PhysicalNames, the readable group name comes from
+    field_data ({name: [physical_id, dim]}) instead of the "group_<id>"
+    fallback."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    pts = np.array([[0, 0], [1, 0], [0, 1]], float)
+    cells = [CellBlock("triangle", np.array([[0, 1, 2]]))]
+    mesh = Mesh(
+        pts,
+        cells,
+        cell_data={"gmsh:physical": [np.array([7])]},
+        field_data={"my_surface": np.array([7, 2])},
+    )
+
+    filename = tmp_path / "named.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    assert "my_surface" in back.cell_sets
+    np.testing.assert_array_equal(back.cell_sets["my_surface"][0], [0])
+
+
+def test_gmsh_physical_and_cell_sets_both_preserved(tmp_path):
+    """Gmsh 4.1 can carry BOTH: a named group in cell_sets AND an un-named
+    physical id only in gmsh:physical. Both must survive to MED — the
+    gmsh:physical bridge must not be skipped just because cell_sets is
+    non-empty (and must not duplicate the already-named group)."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    pts = np.array([[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]], float)
+    cells = [CellBlock("triangle", np.array([[0, 1, 3], [1, 2, 4], [2, 5, 4]]))]
+    # cell 0 -> named group "surf" (physical 7); cells 1,2 -> un-named physical 9
+    mesh = Mesh(
+        pts,
+        cells,
+        cell_data={"gmsh:physical": [np.array([7, 9, 9])]},
+        cell_sets={"surf": [np.array([0])]},
+        field_data={"surf": np.array([7, 2])},
+    )
+
+    filename = tmp_path / "mixed.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    # the named group survives, un-named physical 9 becomes group_9,
+    # and "surf" is NOT duplicated as group_7
+    assert "surf" in back.cell_sets
+    assert "group_9" in back.cell_sets
+    assert "group_7" not in back.cell_sets
+    np.testing.assert_array_equal(back.cell_sets["surf"][0], [0])
+    np.testing.assert_array_equal(back.cell_sets["group_9"][0], [1, 2])

@@ -235,8 +235,17 @@ def _ensure_med_families(mesh):
 
         point_data["point_tags"] = point_fam_array
 
-    # cell_sets → element families (negative ids, per MED spec)
-    if not has_cell_tags and mesh.cell_sets:
+    # cell_sets / gmsh:physical → element families (negative ids, per MED spec).
+    #
+    # Two group conventions feed this: named cell_sets (Abaqus ELSET, Ansys,
+    # FLAC3D, Gmsh 4.1 $PhysicalNames, MED) and Gmsh's cell_data array
+    # "gmsh:physical" (one integer physical id per cell — Gmsh 2.2/4.0, MDPA,
+    # and un-named Gmsh 4.1 groups). Both are folded into the same per-cell
+    # group map so a cell belonging to several groups still gets one combined
+    # family. Without the gmsh:physical path a .msh converted to .med would
+    # silently lose every group.
+    gmsh_physical = cell_data.get("gmsh:physical")
+    if not has_cell_tags and (mesh.cell_sets or gmsh_physical is not None):
         n_blocks = len(mesh.cells)
 
         # One family-id array per cell block, initialised to 0
@@ -245,19 +254,47 @@ def _ensure_med_families(mesh):
         ]
 
         # Accumulate group names per (block_idx, local_cell_idx)
-        # cell_sets[set_name] is a list of length n_blocks;
-        # cell_sets[set_name][block_idx] is an array of local indices.
         cell_groups_map: list[list[set]] = [
             [set() for _ in range(len(cb.data))] for cb in mesh.cells
         ]
 
-        for set_name, per_block in mesh.cell_sets.items():
+        # Named cell_sets. cell_sets[set_name] is a list of length n_blocks;
+        # cell_sets[set_name][block_idx] is an array of local indices.
+        for set_name, per_block in (mesh.cell_sets or {}).items():
             for block_idx, indices in enumerate(per_block):
                 if indices is None or len(indices) == 0:
                     continue
                 for local_i in np.asarray(indices, dtype=np.int64):
                     if 0 <= local_i < len(cell_groups_map[block_idx]):
                         cell_groups_map[block_idx][local_i].add(set_name)
+
+        # Gmsh physical ids, for ids NOT already exposed as a named cell_set
+        # (avoids a duplicate group when Gmsh 4.1 carried both). The readable
+        # name is field_data's name for that id, else "group_<id>".
+        if gmsh_physical is not None:
+            id_to_name = {}
+            for gname, val in (mesh.field_data or {}).items():
+                arr = np.asarray(val).ravel()
+                if arr.size >= 1:
+                    try:
+                        id_to_name[int(arr[0])] = gname
+                    except (ValueError, TypeError):
+                        continue
+
+            for block_idx, cb in enumerate(mesh.cells):
+                if block_idx >= len(gmsh_physical) or gmsh_physical[block_idx] is None:
+                    continue
+                block_phys = np.asarray(gmsh_physical[block_idx]).ravel()
+                for local_i in range(len(cb.data)):
+                    pid = int(block_phys[local_i])
+                    if pid == 0:
+                        continue  # family 0 — no group
+                    name = id_to_name.get(pid)
+                    if name is not None and name in (mesh.cell_sets or {}):
+                        continue  # already captured as a named cell_set
+                    if name is None:
+                        name = f"group_{pid}"
+                    cell_groups_map[block_idx][local_i].add(name)
 
         combo_to_fam_cell: dict = {}
         next_cell_fam = -1  # element families: negative (MED spec)
@@ -281,7 +318,7 @@ def _ensure_med_families(mesh):
 
         cell_data["cell_tags"] = cell_fam_arrays
 
-    # Rebuild the Mesh with the enriched data 
+    # Rebuild the Mesh with the enriched data
     out = Mesh(
         points=mesh.points,
         cells=mesh.cells,
