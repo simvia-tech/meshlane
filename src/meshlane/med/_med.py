@@ -87,6 +87,21 @@ def _med_cells_for_write(cell_type, data):
     return _reorder_med_cells(cell_type, data)
 
 
+def _med_group_key(cell_type):
+    """Map a meshlane cell type to its MED group bucket. MED has a single group
+    for all polyhedra (POE) and a single group for all linear polygons (POG),
+    whereas meshlane splits them by node count (polyhedron<N>, polygon<N>). Those
+    are bucketed under a common key so they merge into one MED group on write.
+    "polygon2" is the MED quadratic polygon (POG2) and keeps its own bucket."""
+    if cell_type.startswith("polyhedron"):
+        return "polyhedron"
+    if cell_type == "polygon2":
+        return "polygon2"
+    if cell_type.startswith("polygon"):
+        return "polygon"
+    return cell_type
+
+
 numpy_void_str = np.bytes_("")
 
 MED_FLOAT32 = 4
@@ -111,7 +126,8 @@ med_to_geo_type = {
     "HE8": "MED_HEXA8", "H20": "MED_HEXA20", "H27": "MED_HEXA27",
     "PY5": "MED_PYRA5", "P13": "MED_PYRA13",
     "PE6": "MED_PENTA6", "P15": "MED_PENTA15", "PE18": "MED_PENTA18",
-    "POG": "MED_POLYGON", "POG2": "MED_POLYGON2"
+    "POG": "MED_POLYGON", "POG2": "MED_POLYGON2",
+    "POE": "MED_POLYHEDRON",
 }
 med_type_to_entity = {
     "PO1": "MED_NODE_ELEMENT",
@@ -123,6 +139,7 @@ med_type_to_entity = {
     "PY5": "MED_CELL", "P13": "MED_CELL",
     "PE6": "MED_CELL", "P15": "MED_CELL", "PE18": "MED_CELL",
     "POG": "MED_CELL", "POG2": "MED_CELL",
+    "POE": "MED_CELL",
 }
 
 
@@ -363,6 +380,40 @@ def read(filename):
     cell_types = []
     med_cells = mesh["MAI"]
     for med_cell_type, med_cell_type_group in med_cells.items():
+        if med_cell_type == "POE":  # MED_POLYHEDRON: variable faces and nodes
+            nod = med_cell_type_group["NOD"][()] - 1  # flat node ids of every face
+            inn = med_cell_type_group["INN"][()]  # per-face index into NOD
+            ifn = med_cell_type_group["IFN"][()]  # per-polyhedron index into faces
+            fam = (
+                med_cell_type_group["FAM"][()]
+                if "FAM" in med_cell_type_group
+                else None
+            )
+            n_poly = len(ifn) - 1
+            polys = []
+            for p in range(n_poly):
+                faces = [
+                    nod[inn[fidx] - 1 : inn[fidx + 1] - 1]
+                    for fidx in range(ifn[p] - 1, ifn[p + 1] - 1)
+                ]
+                polys.append(faces)
+            # Group by unique node count into polyhedron<N> blocks, matching the
+            # meshlane convention (see openfoam._build_polyhedra).
+            by_n = defaultdict(list)
+            for i, poly in enumerate(polys):
+                n_nodes = len(set().union(*poly)) if poly else 0
+                by_n[n_nodes].append(i)
+            for n_nodes, idxs in by_n.items():
+                block = np.empty(len(idxs), dtype=object)
+                for j, i in enumerate(idxs):
+                    block[j] = [np.asarray(f, dtype=int) for f in polys[i]]
+                cells.append((f"polyhedron{n_nodes}", block))
+                cell_types.append(f"polyhedron{n_nodes}")
+                if fam is not None:
+                    if "cell_tags" not in cell_data:
+                        cell_data["cell_tags"] = []
+                    cell_data["cell_tags"].append(fam[np.array(idxs)])
+            continue
         cell_type = med_to_meshio_type[med_cell_type]
         cell_types.append(cell_type)
         if med_cell_type in ("POG", "POG2"):  # polygonal cells with variable node count
@@ -684,36 +735,92 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
 
     for k, cell_block in enumerate(mesh.cells):
         cell_type = cell_block.type
-        if cell_type not in cells_by_type:
-            cells_by_type[cell_type] = []
-            cell_tags_by_type[cell_type] = []
-        cells_by_type[cell_type].append(cell_block.data)
+        # Variable-size cells share a single MED group: all polyhedron<N> -> POE,
+        # all linear polygon<N> (and generic "polygon") -> POG. "polygon2" is the
+        # MED quadratic polygon (POG2), so it keeps its own bucket. Bucket them
+        # here under a common key; they are merged when written below.
+        key = _med_group_key(cell_type)
+        if key not in cells_by_type:
+            cells_by_type[key] = []
+            cell_tags_by_type[key] = []
+        cells_by_type[key].append(cell_block.data)
         if "cell_tags" in mesh.cell_data:
-            cell_tags_by_type[cell_type].append(mesh.cell_data["cell_tags"][k])
+            cell_tags_by_type[key].append(mesh.cell_data["cell_tags"][k])
     cells_group = time_step.create_group("MAI")
     cells_group.attrs.create("CGT", 1)
     for cell_type, cells_list in cells_by_type.items():
-        med_type = meshio_to_med_type[cell_type]
+        if cell_type == "polyhedron":
+            med_type = "POE"
+        elif cell_type == "polygon":
+            med_type = "POG"
+        elif cell_type == "polygon2":
+            med_type = "POG2"
+        else:
+            med_type = meshio_to_med_type[cell_type]
         med_cells = cells_group.create_group(med_type)
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
-        if cell_type in ("polygon", "polygon2"):
-            all_polygons = sum(cells_list, [])
-            all_nodes = np.concatenate([c + 1 for c in all_polygons])
-            lengths = [len(c) for c in all_polygons]
-            inn = np.concatenate([[1], np.cumsum(lengths) + 1])
+        if cell_type == "polyhedron":
+            # MED_POLYHEDRON (POE): three-level, 1-based indexing --
+            #   NOD : flat node ids of every face, all polyhedra concatenated
+            #   INN : per-face offsets into NOD              (len = n_faces + 1)
+            #   IFN : per-polyhedron offsets into the faces  (len = n_poly + 1)
+            # meshlane stores each polyhedron as a list of outward-oriented face
+            # node-arrays, which maps directly onto this.
+            all_polys = [poly for arr in cells_list for poly in arr]
+            nod_parts = []
+            inn = [1]
+            ifn = [1]
+            for poly in all_polys:
+                for face in poly:
+                    face = np.asarray(face, dtype=int)
+                    nod_parts.append(face + 1)
+                    inn.append(inn[-1] + len(face))
+                ifn.append(ifn[-1] + len(poly))
+            all_nodes = (
+                np.concatenate(nod_parts) if nod_parts else np.array([], dtype=int)
+            )
+            inn = np.array(inn, dtype=int)
+            ifn = np.array(ifn, dtype=int)
+            # MED requires NBR on every dataset = that dataset's own length.
             nod = med_cells.create_dataset("NOD", data=all_nodes)
             nod.attrs.create("CGT", 1)
-            nod.attrs.create("NBR", len(all_polygons))
+            nod.attrs.create("NBR", len(all_nodes))
             inn_ds = med_cells.create_dataset("INN", data=inn)
             inn_ds.attrs.create("CGT", 1)
+            inn_ds.attrs.create("NBR", len(inn))
+            ifn_ds = med_cells.create_dataset("IFN", data=ifn)
+            ifn_ds.attrs.create("CGT", 1)
+            ifn_ds.attrs.create("NBR", len(ifn))
+            med_cells.attrs.create("GEO", 500)  # MED_POLYHEDRON geometry type
+            n_merged = len(all_polys)
+        elif cell_type in ("polygon", "polygon2"):
+            # cells_list entries may be 2D arrays (polygon<N>, fixed N per block)
+            # or lists of variable-length arrays (generic "polygon"); normalise to
+            # one flat list of node arrays.
+            all_polygons = [
+                np.asarray(poly) for arr in cells_list for poly in arr
+            ]
+            all_nodes = np.concatenate([c + 1 for c in all_polygons])
+            lengths = [len(c) for c in all_polygons]
+            inn = np.concatenate([[1], np.cumsum(lengths) + 1]).astype(int)
+            # MED requires NBR on every dataset = that dataset's own length.
+            nod = med_cells.create_dataset("NOD", data=all_nodes)
+            nod.attrs.create("CGT", 1)
+            nod.attrs.create("NBR", len(all_nodes))
+            inn_ds = med_cells.create_dataset("INN", data=inn)
+            inn_ds.attrs.create("CGT", 1)
+            inn_ds.attrs.create("NBR", len(inn))
+            med_cells.attrs.create("GEO", 400)  # MED_POLYGON geometry type
             n_merged = len(all_polygons)
         else:
             # Merge cells of the same type
             merged_cells = np.concatenate(cells_list, axis=0)
-            merged_cells = _med_cells_for_write(cell_type, merged_cells)  # meshlane -> MED
-            nod = med_cells.create_dataset("NOD", data=merged_cells.flatten(order="F") + 1)
+            merged_cells = _med_cells_for_write(cell_type, merged_cells)
+            nod = med_cells.create_dataset(
+                "NOD", data=merged_cells.flatten(order="F") + 1
+            )
             nod.attrs.create("CGT", 1)
             nod.attrs.create("NBR", len(merged_cells))
             n_merged = len(merged_cells)

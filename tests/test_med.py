@@ -1468,3 +1468,133 @@ def test_med_multi_3d_orientation_and_roundtrip(tmp_path):
     by_name = dict(zip(names, meshes))
     for name, orig in (("a", m1), ("b", m2)):
         np.testing.assert_array_equal(orig.cells[0].data, by_name[name].cells[0].data)
+
+
+# --- polyhedra (MED_POLYHEDRON / POE) --------------------------------------
+
+# unit cube written as a single polyhedron: 8 nodes, 6 outward-oriented quad faces
+_CUBE_PTS = np.array(
+    [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+     [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], float,
+)
+_CUBE_FACES = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4],
+               [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]]
+
+
+def _polyhedron_block(polys):
+    """polys: list of polyhedra, each a list of face node-lists -> object array."""
+    from meshlane._mesh import CellBlock
+
+    data = np.empty(len(polys), dtype=object)
+    for i, faces in enumerate(polys):
+        data[i] = [np.array(f, dtype=int) for f in faces]
+    return CellBlock("polyhedron8", data)
+
+
+def test_polyhedron_roundtrip(tmp_path):
+    """A polyhedral cell survives write -> MED -> read with faces preserved."""
+    from meshlane._mesh import Mesh
+
+    mesh = Mesh(_CUBE_PTS, [_polyhedron_block([_CUBE_FACES])])
+    filename = tmp_path / "poly.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    assert [c.type for c in back.cells] == ["polyhedron8"]
+    orig = [set(f) for f in _CUBE_FACES]
+    got = [set(f.tolist()) for f in back.cells[0].data[0]]
+    assert orig == got
+
+
+def test_polyhedron_med_layout_matches_medcoupling(tmp_path):
+    """Pin the on-disk MED_POLYHEDRON layout (NOD/INN/IFN, GEO=500) to the values
+    MEDCoupling writes for the same two cubes-as-polyhedra."""
+    from meshlane._mesh import Mesh
+
+    pts = np.vstack([_CUBE_PTS, _CUBE_PTS + [2, 0, 0]])
+    p0 = _CUBE_FACES
+    p1 = [[n + 8 for n in f] for f in _CUBE_FACES]
+    mesh = Mesh(pts, [_polyhedron_block([p0, p1])])
+
+    filename = tmp_path / "poly2.med"
+    meshlane.write(filename, mesh)
+
+    with h5py.File(filename, "r") as f:
+        m = f["ENS_MAA"]["mesh"]
+        if "NOE" not in m:
+            m = m[list(m.keys())[0]]
+        g = m["MAI"]["POE"]
+        nod, inn, ifn = g["NOD"][()], g["INN"][()], g["IFN"][()]
+        geo = g.attrs["GEO"]
+
+    # reference values produced by MEDCoupling's MEDLoader for the same cells
+    ref_ifn = [1, 7, 13]
+    ref_inn = [1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49]
+    ref_nod = [1, 4, 3, 2, 5, 6, 7, 8, 1, 2, 6, 5, 2, 3, 7, 6, 3, 4, 8, 7,
+               4, 1, 5, 8, 9, 12, 11, 10, 13, 14, 15, 16, 9, 10, 14, 13,
+               10, 11, 15, 14, 11, 12, 16, 15, 12, 9, 13, 16]
+    assert geo == 500
+    np.testing.assert_array_equal(ifn, ref_ifn)
+    np.testing.assert_array_equal(inn, ref_inn)
+    np.testing.assert_array_equal(nod, ref_nod)
+
+
+def test_polyhedron_mixed_node_counts_split_on_read(tmp_path):
+    """A POE group with polyhedra of different node counts is read back into
+    separate polyhedron<N> blocks (meshlane convention)."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    # a tetra-as-polyhedron (4 nodes, 4 triangular faces) + a cube (8 nodes)
+    tet_pts = np.array([[5, 0, 0], [6, 0, 0], [5, 1, 0], [5, 0, 1]], float)
+    pts = np.vstack([_CUBE_PTS, tet_pts])
+    tet_faces = [[8, 10, 9], [8, 9, 11], [9, 10, 11], [8, 11, 10]]
+    data = np.empty(2, dtype=object)
+    data[0] = [np.array(f) for f in _CUBE_FACES]
+    data[1] = [np.array(f) for f in tet_faces]
+    mesh = Mesh(pts, [CellBlock("polyhedron8", data)])  # mixed 8- and 4-node
+
+    filename = tmp_path / "mixed.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    assert {c.type for c in back.cells} == {"polyhedron8", "polyhedron4"}
+
+
+def test_polyhedron_groups_roundtrip(tmp_path):
+    """Groups (cell_sets) on polyhedra survive the MED round-trip."""
+    from meshlane._mesh import Mesh
+
+    pts = np.vstack([_CUBE_PTS, _CUBE_PTS + [2, 0, 0]])
+    p1 = [[n + 8 for n in f] for f in _CUBE_FACES]
+    mesh = Mesh(
+        pts,
+        [_polyhedron_block([_CUBE_FACES, p1])],
+        cell_sets={"solid": [np.array([0, 1])]},
+    )
+    filename = tmp_path / "polygrp.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    assert "solid" in back.cell_sets
+    np.testing.assert_array_equal(back.cell_sets["solid"][0], [0, 1])
+
+
+def test_polygonN_fixed_block_written_to_med(tmp_path):
+    """OpenFOAM-style polygon<N> blocks (fixed N, stored as a 2D array) are
+    written to MED's POG group and read back with nodes preserved."""
+    from meshlane._mesh import Mesh, CellBlock
+
+    pts = np.array(
+        [[0, 0, 0], [1, 0, 0], [1.5, 1, 0], [0.5, 1.5, 0], [-0.5, 1, 0]], float
+    )
+    pentagon = np.array([[0, 1, 2, 3, 4]])
+    mesh = Mesh(pts, [CellBlock("polygon5", pentagon)])
+
+    filename = tmp_path / "pent.med"
+    meshlane.write(filename, mesh)
+    back = meshlane.read(filename)
+
+    # POG reads back as a generic "polygon" block; nodes preserved
+    assert len(back.cells) == 1
+    assert back.cells[0].type.startswith("polygon")
+    np.testing.assert_array_equal(np.asarray(back.cells[0].data[0]), [0, 1, 2, 3, 4])
