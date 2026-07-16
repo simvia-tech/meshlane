@@ -7,6 +7,7 @@ import numpy as np
 import re
 
 from ._med41 import FieldBitmaskWriter
+from . import _orient
 
 from .._common import num_nodes_per_cell, warn
 from .._exceptions import ReadError, WriteError
@@ -783,6 +784,47 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         cells_by_type[key].append(cell_block.data)
         if "cell_tags" in mesh.cell_data:
             cell_tags_by_type[key].append(mesh.cell_data["cell_tags"][k])
+    # Prepare final MED-order connectivity per bucket
+    # "regular" cells (fixed node count per type: tetra, pyramid, wedge,
+    # hexahedron, ...) get the meshlane->MED node permutation here. 3D cells
+    # then go through a topological orientation pass (see _orient) so every
+    # internal face is shared by its two cells with opposite winding, which MED
+    # readers (code_saturne, Salome, code_aster,...) require.
+    prepared = {}
+    orient_blocks = []   # 3D cells fed to the orientation pass
+    orient_keys = []     # bucket key per orientation block (to map masks back)
+    for cell_type, cells_list in cells_by_type.items():
+        if cell_type == "polyhedron":
+            all_polys = [poly for arr in cells_list for poly in arr]
+            prepared[cell_type] = ("poly", all_polys)
+            orient_blocks.append({"kind": "polyhedron", "faces": all_polys})
+            orient_keys.append(cell_type)
+        elif cell_type in ("polygon", "polygon2"):
+            all_polygons = [np.asarray(p) for arr in cells_list for p in arr]
+            prepared[cell_type] = ("polygon", all_polygons)
+        else:
+            # "regular" = a fixed-shape cell (tetra/pyramid/hexahedron/...)
+            merged = np.concatenate(cells_list, axis=0)
+            merged = _med_cells_for_write(cell_type, merged)  # meshlane -> MED
+            prepared[cell_type] = ("regular", merged)
+            if cell_type in _orient.ORIENTABLE_TYPES:
+                orient_blocks.append(
+                    {"kind": "regular", "type": cell_type, "conn": merged}
+                )
+                orient_keys.append(cell_type)
+
+    if orient_blocks:
+        masks = _orient.consistent_orientation_flips(orient_blocks, mesh.points)
+        if masks is not None:
+            for key, mask in zip(orient_keys, masks):
+                data_kind, data = prepared[key]
+                if data_kind == "regular":
+                    data = _orient.apply_regular_flip(key, data, mask)
+                else:  # polyhedron
+                    data = _orient.apply_polyhedron_flip(data, mask)
+                prepared[key] = (data_kind, data)
+
+    # Write cells
     cells_group = time_step.create_group("MAI")
     cells_group.attrs.create("CGT", 1)
     for cell_type, cells_list in cells_by_type.items():
@@ -798,14 +840,13 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
+        _, data = prepared[cell_type]
         if cell_type == "polyhedron":
             # MED_POLYHEDRON (POE): three-level, 1-based indexing --
             #   NOD : flat node ids of every face, all polyhedra concatenated
             #   INN : per-face offsets into NOD              (len = n_faces + 1)
             #   IFN : per-polyhedron offsets into the faces  (len = n_poly + 1)
-            # meshlane stores each polyhedron as a list of outward-oriented face
-            # node-arrays, which maps directly onto this.
-            all_polys = [poly for arr in cells_list for poly in arr]
+            all_polys = data
             nod_parts = []
             inn = [1]
             ifn = [1]
@@ -833,12 +874,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             med_cells.attrs.create("GEO", 500)  # MED_POLYHEDRON geometry type
             n_merged = len(all_polys)
         elif cell_type in ("polygon", "polygon2"):
-            # cells_list entries may be 2D arrays (polygon<N>, fixed N per block)
-            # or lists of variable-length arrays (generic "polygon"); normalise to
-            # one flat list of node arrays.
-            all_polygons = [
-                np.asarray(poly) for arr in cells_list for poly in arr
-            ]
+            all_polygons = data
             all_nodes = np.concatenate([c + 1 for c in all_polygons])
             lengths = [len(c) for c in all_polygons]
             inn = np.concatenate([[1], np.cumsum(lengths) + 1]).astype(int)
@@ -852,9 +888,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             med_cells.attrs.create("GEO", 400)  # MED_POLYGON geometry type
             n_merged = len(all_polygons)
         else:
-            # Merge cells of the same type
-            merged_cells = np.concatenate(cells_list, axis=0)
-            merged_cells = _med_cells_for_write(cell_type, merged_cells)
+            merged_cells = data
             nod = med_cells.create_dataset(
                 "NOD", data=merged_cells.flatten(order="F") + 1
             )
