@@ -50,6 +50,7 @@ def add_args(parser):
 
 def convert(args):
     # read mesh data
+    print(f"Reading '{args.infile}' (large meshes may take a while)...", flush=True)
     mesh = read(args.infile, file_format=args.input_format)
 
     # Some converters (like VTK) require `points` to be contiguous.
@@ -72,4 +73,6 @@ def convert(args):
     if args.ascii:
         kwargs["binary"] = False
 
+    print(f"Writing '{args.outfile}'...", flush=True)
     write(args.outfile, mesh, **kwargs)
+    print("Done.")
