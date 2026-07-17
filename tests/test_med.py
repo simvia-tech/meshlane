@@ -1741,3 +1741,46 @@ def test_med_writer_produces_consistent_orientation(tmp_path):
     blocks = [{"kind": "regular", "type": "hexahedron", "conn": dconn}]
     # already consistent on disk -> the pass finds nothing to fix
     assert _orient.consistent_orientation_flips(blocks, _TWOHEX_PTS) is None
+
+
+def test_med_geo_attribute(tmp_path):
+    """Every cell group must carry the numeric MED GEO attribute; code_aster's
+    MED reader rejects a group without it."""
+    import h5py
+
+    from meshlane.med._med import med_geo_code
+
+    p = tmp_path / "geo.med"
+    meshlane.med.write(p, helpers.tet10_mesh)
+    geos = {}
+    with h5py.File(p, "r") as f:
+        def walk(g):
+            for k in g:
+                it = g[k]
+                if hasattr(it, "attrs") and "GEO" in it.attrs:
+                    geos[k] = int(it.attrs["GEO"])
+                if hasattr(it, "keys"):
+                    walk(it)
+        walk(f)
+    assert geos.get("T10") == med_geo_code["T10"] == 310
+
+
+def test_med_node_perm_self_inverse():
+    """meshlane<->MED node permutations must be valid, self-inverse permutations."""
+    from meshlane.med._med import _med_node_perm
+
+    for t, perm in _med_node_perm.items():
+        assert sorted(perm) == list(range(len(perm))), t
+        assert all(perm[perm[i]] == i for i in range(len(perm))), t
+
+
+def test_orient_flip_perm_self_inverse():
+    """Orientation-reversing flip perms must be valid, self-inverse; quadratic 3D
+    types must be handled by the topological orientation pass."""
+    from meshlane.med import _orient
+
+    for t, perm in _orient._FLIP_PERM.items():
+        assert sorted(perm) == list(range(len(perm))), t
+        assert all(perm[perm[i]] == i for i in range(len(perm))), t
+    for t in ("tetra10", "hexahedron20", "wedge15", "pyramid13"):
+        assert t in _orient.ORIENTABLE_TYPES
