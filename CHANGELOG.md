@@ -6,6 +6,41 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## meshlane 5.4.2 (Jul 17, 2026)
+
+### Added
+- MED: read/write support for polyhedra (`MED_POLYHEDRON`) and variable-node
+  polygon (`MED_POLYGON`) writing, so OpenFOAM (snappyHexMesh) polyhedral
+  meshes convert to MED. (#12)
+- CLI: `meshlane info` handles multi-mesh MED files; `meshlane convert` prints
+  read/write progress. (#14)
+- CLI: `meshlane convert --remove-duplicates` removes coincident (duplicate)
+  cells. By default they are kept and a warning is emitted instead. (#17, #18)
+
+### Fixed
+- MED: 3D cells are written with consistent, correct orientation for external MED
+  readers, for both linear and quadratic cells (tetra10, hexahedron20, ...), via
+  the meshlane<->MED node ordering plus a topological pass for warped cells, so
+  `foam -> med` and `inp -> med` meshes are accepted by MED tools (code_saturne, code_aster, etc.). (#9, #13, #16)
+- MED: every cell group is written with its numeric `GEO` attribute, so
+  meshlane's MED files load in readers such as code_aster. (#16)
+- MED: Gmsh physical groups are preserved when writing MED, so a `.msh -> .med`
+  conversion no longer drops its groups. (#11)
+- Ansys: the `.inp` reader handles 1-integer `NBLOCK` and COMPACT `EBLOCK`
+  formats, so real Ansys Workbench exports convert. (#15)
+
+### Changed
+- Abaqus: more robust `.inp` reader (membrane/surface elements, set-of-sets,
+  `*ELSET, GENERATE`, encoding fallback). (#5)
+- OpenFOAM: faster, memory-bounded polyMesh reader (binary + ASCII). (#3)
+- MED: more robust family/group handling (HDF5 creation-order tracking, dynamic
+  family generation). (#4)
+
+### Note
+Because of the MED orientation and `GEO` fixes, a MED file written by this
+version differs from one written by 5.4.1 for 3D meshes (now correctly oriented
+and loadable by external MED tools). MED <-> MED round-trips are unaffected.
+
 ## meshlane 5.4.1
 
 First deploy on pypi.org using github action.
