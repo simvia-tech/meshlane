@@ -29,6 +29,12 @@ _RAW_FACES = {
     "hexahedron": [[0, 3, 2, 1], [4, 5, 6, 7], [0, 4, 7, 3],
                    [3, 7, 6, 2], [2, 6, 5, 1], [1, 5, 4, 0]],
 }
+# Quadratic types reuse their linear base's faces (the pass only needs the
+# corner faces).
+_QUADRATIC_BASE = {"tetra10": "tetra", "pyramid13": "pyramid",
+                   "wedge15": "wedge", "hexahedron20": "hexahedron"}
+for _q, _b in _QUADRATIC_BASE.items():
+    _RAW_FACES[_q] = _RAW_FACES[_b]
 _FACES = {t: [f[::-1] for f in fs] for t, fs in _RAW_FACES.items()}
 
 # orientation-reversing node permutations (self-inverse) per MED cell type
@@ -37,6 +43,12 @@ _FLIP_PERM = {
     "pyramid": [0, 3, 2, 1, 4],
     "wedge": [0, 2, 1, 3, 5, 4],
     "hexahedron": [0, 3, 2, 1, 4, 7, 6, 5],
+    # quadratic: linear corner flip + edge-midpoints, verified against MEDCoupling
+    "tetra10": [0, 2, 1, 3, 6, 5, 4, 7, 9, 8],
+    "pyramid13": [0, 3, 2, 1, 4, 8, 7, 6, 5, 9, 12, 11, 10],
+    "wedge15": [0, 2, 1, 3, 5, 4, 8, 7, 6, 11, 10, 9, 12, 14, 13],
+    "hexahedron20": [0, 3, 2, 1, 4, 7, 6, 5, 11, 10, 9, 8, 15, 14, 13, 12,
+                     16, 19, 18, 17],
 }
 
 ORIENTABLE_TYPES = set(_FACES)

@@ -9,7 +9,7 @@ import re
 from ._med41 import FieldBitmaskWriter
 from . import _orient
 
-from .._common import num_nodes_per_cell, warn
+from .._common import num_nodes_per_cell
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
 from collections import defaultdict
@@ -48,29 +48,23 @@ med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 # meshlane convention and MED->MED round-trips are the identity, while meshlane->MED
 # output (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such
 # as Salome and code_saturne.
+#
+# The quadratic entries reuse the linear corner permutation for the corners and
+# carry each edge-midpoint node along with its edge, so corners and midside nodes
+# stay consistent. They were derived and verified against MEDCoupling: after the
+# permutation every cell has positive signed volume and every midside node lies on
+# its edge midpoint per MEDCoupling's edge model.
 _med_node_perm = {
     "tetra": [0, 1, 3, 2],
     "pyramid": [0, 3, 2, 1, 4],
     "wedge": [3, 4, 5, 0, 1, 2],
     "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
+    "tetra10": [0, 1, 3, 2, 4, 8, 7, 6, 5, 9],
+    "pyramid13": [0, 3, 2, 1, 4, 8, 7, 6, 5, 9, 12, 11, 10],
+    "wedge15": [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8, 12, 13, 14],
+    "hexahedron20": [4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11,
+                     16, 17, 18, 19],
 }
-
-# Quadratic 3D types have the same meshlane<->MED orientation difference, but their
-# permutations (corners + edge-midpoints) are not implemented yet, so they are
-# left unconverted in both directions (read and write) and may be mis-oriented.
-_med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
-
-
-def _warn_unconverted_3d(cell_type):
-    """Warn that a quadratic 3D cell type is being read or written without the
-    meshlane <-> MED node-ordering conversion (not implemented for these types
-    yet), so it may be mis-oriented. Called on both read and write."""
-    if cell_type in _med_unconverted_3d:
-        warn(
-            f"MED: orientation conversion for quadratic 3D cells '{cell_type}' is "
-            "not yet implemented. These cells may be mis-oriented for MED tools "
-            "(Salome, code_saturne, code_aster, etc.)."
-        )
 
 
 def _reorder_med_cells(cell_type, data):
@@ -79,13 +73,6 @@ def _reorder_med_cells(cell_type, data):
     both writers (single-mesh and multi-mesh) so the paths cannot drift."""
     perm = _med_node_perm.get(cell_type)
     return data[:, perm] if perm is not None else data
-
-
-def _med_cells_for_write(cell_type, data):
-    """Like :func:`_reorder_med_cells`, for the write paths: additionally warn
-    for unconverted quadratic 3D types."""
-    _warn_unconverted_3d(cell_type)
-    return _reorder_med_cells(cell_type, data)
 
 
 def _med_group_key(cell_type):
@@ -141,6 +128,21 @@ med_type_to_entity = {
     "PE6": "MED_CELL", "P15": "MED_CELL", "PE18": "MED_CELL",
     "POG": "MED_CELL", "POG2": "MED_CELL",
     "POE": "MED_CELL",
+}
+
+# Numeric MED geometry-type codes, written as the "GEO" attribute on every cell
+# group. Some MED tools may reject a cell group without it. Codes follow MED's convention
+# dim*100 + n_nodes (point = 1); polygons/polyhedra use 400/500 (see writer).
+med_geo_code = {
+    "PO1": 1,
+    "SE2": 102, "SE3": 103, "SE4": 104,
+    "TR3": 203, "TR6": 206, "TR7": 207,
+    "QU4": 204, "QU8": 208, "QU9": 209,
+    "TE4": 304, "T10": 310,
+    "HE8": 308, "H20": 320, "H27": 327,
+    "PY5": 305, "P13": 313,
+    "PE6": 306, "P15": 315, "PE18": 318,
+    "POG": 400, "POG2": 420, "POE": 500,
 }
 
 
@@ -465,7 +467,6 @@ def read(filename):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
-            _warn_unconverted_3d(cell_type)
             data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
             cells += [(cell_type, data)]
 
@@ -805,7 +806,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         else:
             # "regular" = a fixed-shape cell (tetra/pyramid/hexahedron/...)
             merged = np.concatenate(cells_list, axis=0)
-            merged = _med_cells_for_write(cell_type, merged)  # meshlane -> MED
+            merged = _reorder_med_cells(cell_type, merged)  # meshlane -> MED
             prepared[cell_type] = ("regular", merged)
             if cell_type in _orient.ORIENTABLE_TYPES:
                 orient_blocks.append(
@@ -840,6 +841,7 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
+        med_cells.attrs.create("GEO", med_geo_code[med_type])
         _, data = prepared[cell_type]
         if cell_type == "polyhedron":
             # MED_POLYHEDRON (POE): three-level, 1-based indexing --
@@ -871,7 +873,6 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             ifn_ds = med_cells.create_dataset("IFN", data=ifn)
             ifn_ds.attrs.create("CGT", 1)
             ifn_ds.attrs.create("NBR", len(ifn))
-            med_cells.attrs.create("GEO", 500)  # MED_POLYHEDRON geometry type
             n_merged = len(all_polys)
         elif cell_type in ("polygon", "polygon2"):
             all_polygons = data
@@ -885,7 +886,6 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             inn_ds = med_cells.create_dataset("INN", data=inn)
             inn_ds.attrs.create("CGT", 1)
             inn_ds.attrs.create("NBR", len(inn))
-            med_cells.attrs.create("GEO", 400)  # MED_POLYGON geometry type
             n_merged = len(all_polygons)
         else:
             merged_cells = data
