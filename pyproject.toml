@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshlane"
-version = "5.4.1"
+version = "5.4.2"
 description = "I/O for many mesh formats"
 readme = "README.md"
 requires-python = ">=3.8"
