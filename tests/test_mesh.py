@@ -106,3 +106,29 @@ def test_copy():
 
     assert np.all(mesh.points == mesh2.points)
     assert not np.may_share_memory(mesh.points, mesh2.points)
+
+
+def test_remove_duplicate_cells():
+    # cell 2 duplicates cell 0 (same node set, different node order)
+    tri = np.array([[0, 1, 2], [1, 2, 3], [0, 2, 1]])
+    pts = np.random.rand(4, 3)
+    mesh = meshlane.Mesh(
+        pts,
+        [("triangle", tri)],
+        cell_data={"val": [np.array([10, 20, 30])]},
+        cell_sets={"A": [np.array([0, 2])], "B": [np.array([1])]},
+    )
+    n = mesh.remove_duplicate_cells()
+    assert n == 1
+    assert_equal(mesh.cells[0].data, np.array([[0, 1, 2], [1, 2, 3]]))
+    # cell_data of the dropped cell is removed
+    assert_equal(mesh.cell_data["val"][0], np.array([10, 20]))
+    # set A loses the dropped duplicate (kept cell 0 -> new index 0)
+    assert_equal(mesh.cell_sets["A"][0], np.array([0]))
+    # set B: cell 1 -> new index 1
+    assert_equal(mesh.cell_sets["B"][0], np.array([1]))
+
+
+def test_remove_duplicate_cells_none():
+    mesh = copy.deepcopy(helpers.tri_mesh)
+    assert mesh.remove_duplicate_cells() == 0

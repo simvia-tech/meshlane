@@ -272,6 +272,46 @@ class Mesh:
             [d for c, d in zip(self.cells, self.cell_data[name]) if c.type == cell_type]
         )
 
+    def remove_duplicate_cells(self):
+        """Remove cells that duplicate another cell of the same type (identical
+        node set, order-independent), keeping the first occurrence.
+
+        ``cell_data`` and ``cell_sets`` are remapped onto the surviving cells.
+        Returns the number of cells removed.
+
+        Coincident cells occupy the same space and can cause connectivity errors
+        in downstream solvers (e.g. code_saturne). This is opt-in: meshlane keeps
+        the mesh faithful by default.
+        """
+        seen = set()
+        keeps = []
+        n_removed = 0
+        for cell_block in self.cells:
+            keep = np.ones(len(cell_block.data), dtype=bool)
+            for j, row in enumerate(cell_block.data):
+                key = (cell_block.type, frozenset(int(x) for x in row))
+                if key in seen:
+                    keep[j] = False
+                else:
+                    seen.add(key)
+            keeps.append(keep)
+            n_removed += int((~keep).sum())
+        if n_removed == 0:
+            return 0
+        for cell_block, keep in zip(self.cells, keeps):
+            cell_block.data = cell_block.data[keep]
+        for name, value_list in self.cell_data.items():
+            self.cell_data[name] = [v[k] for v, k in zip(value_list, keeps)]
+        for name, member_list in self.cell_sets.items():
+            new_members = []
+            for members, keep in zip(member_list, keeps):
+                new_index = np.cumsum(keep) - 1  # old local index -> new index
+                members = np.asarray(members, dtype=int)
+                members = members[keep[members]]  # drop members that were removed
+                new_members.append(new_index[members])
+            self.cell_sets[name] = new_members
+        return n_removed
+
     @property
     def cells_dict(self):
         cells_dict = {}

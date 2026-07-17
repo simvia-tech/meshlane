@@ -1,5 +1,6 @@
 import numpy as np
 
+from .._common import warn
 from .._helpers import _writer_map, read, reader_map, write
 
 
@@ -46,6 +47,11 @@ def add_args(parser):
         action="store_true",
         help="if possible, convert integer data to sets (useful if the output type does not support integer data)",
     )
+    parser.add_argument(
+        "--remove-duplicates",
+        action="store_true",
+        help="remove duplicate cells (cells sharing the same node set); off by default",
+    )
 
 
 def convert(args):
@@ -55,6 +61,29 @@ def convert(args):
 
     # Some converters (like VTK) require `points` to be contiguous.
     mesh.points = np.ascontiguousarray(mesh.points)
+
+    # Duplicate (coincident) cells: remove on request, otherwise just warn.
+    if args.remove_duplicates:
+        n_dup = mesh.remove_duplicate_cells()
+        if n_dup:
+            print(f"Removed {n_dup} duplicate cell(s) with identical node sets.")
+    else:
+        seen = set()
+        n_dup = 0
+        for cell_block in mesh.cells:
+            for row in cell_block.data:
+                key = (cell_block.type, frozenset(int(x) for x in row))
+                if key in seen:
+                    n_dup += 1
+                else:
+                    seen.add(key)
+        if n_dup:
+            warn(
+                f"{n_dup} duplicate cell(s) with identical node sets were detected. "
+                "Coincident cells may cause connectivity errors in some solvers. "
+                "To remove them, rerun the conversion with the --remove-duplicates "
+                "option."
+            )
 
     if args.sets_to_int_data:
         mesh.point_sets_to_data()
