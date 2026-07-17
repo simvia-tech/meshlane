@@ -68,15 +68,7 @@ def convert(args):
         if n_dup:
             print(f"Removed {n_dup} duplicate cell(s) with identical node sets.")
     else:
-        seen = set()
-        n_dup = 0
-        for cell_block in mesh.cells:
-            for row in cell_block.data:
-                key = (cell_block.type, frozenset(int(x) for x in row))
-                if key in seen:
-                    n_dup += 1
-                else:
-                    seen.add(key)
+        n_dup = mesh.remove_duplicate_cells(dry_run=True)
         if n_dup:
             warn(
                 f"{n_dup} duplicate cell(s) with identical node sets were detected. "
