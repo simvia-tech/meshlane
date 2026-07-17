@@ -272,12 +272,16 @@ class Mesh:
             [d for c, d in zip(self.cells, self.cell_data[name]) if c.type == cell_type]
         )
 
-    def remove_duplicate_cells(self):
+    def remove_duplicate_cells(self, dry_run=False):
         """Remove cells that duplicate another cell of the same type (identical
-        node set, order-independent), keeping the first occurrence.
+        node set, order-independent), keeping the first occurrence. Returns the
+        number removed; with ``dry_run=True`` returns the number that *would* be
+        removed without modifying the mesh.
 
         ``cell_data`` and ``cell_sets`` are remapped onto the surviving cells.
-        Returns the number of cells removed.
+        Only fixed-shape ("regular") cell types are considered; ``polyhedron``
+        and ``polygon`` blocks (whose rows are not flat node lists) are left
+        untouched.
 
         Coincident cells occupy the same space and can cause connectivity errors
         in downstream solvers (e.g. code_saturne). This is opt-in: meshlane keeps
@@ -288,20 +292,24 @@ class Mesh:
         n_removed = 0
         for cell_block in self.cells:
             keep = np.ones(len(cell_block.data), dtype=bool)
-            for j, row in enumerate(cell_block.data):
-                key = (cell_block.type, frozenset(int(x) for x in row))
-                if key in seen:
-                    keep[j] = False
-                else:
-                    seen.add(key)
+            if not cell_block.type.startswith(("polyhedron", "polygon")):
+                for j, row in enumerate(cell_block.data):
+                    key = (cell_block.type, frozenset(int(x) for x in row))
+                    if key in seen:
+                        keep[j] = False
+                    else:
+                        seen.add(key)
             keeps.append(keep)
             n_removed += int((~keep).sum())
-        if n_removed == 0:
-            return 0
+        if dry_run or n_removed == 0:
+            return n_removed
         for cell_block, keep in zip(self.cells, keeps):
-            cell_block.data = cell_block.data[keep]
+            if not keep.all():
+                cell_block.data = cell_block.data[keep]
         for name, value_list in self.cell_data.items():
-            self.cell_data[name] = [v[k] for v, k in zip(value_list, keeps)]
+            self.cell_data[name] = [
+                v if v is None else v[k] for v, k in zip(value_list, keeps)
+            ]
         for name, member_list in self.cell_sets.items():
             new_members = []
             for members, keep in zip(member_list, keeps):
