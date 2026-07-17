@@ -457,3 +457,56 @@ class TestCMBlockEdgeCases:
         from meshlane._exceptions import ReadError
         with pytest.raises(ReadError, match="range marker"):
             _read_from_str(BAD_CMBLOCK_INP)
+
+
+# Tests: 1-integer NBLOCK header + COMPACT EBLOCK (single- and multi-line)
+def _fmt_1i9_nblock(coords):
+    lines = [f"nblock,3,,{len(coords)}", "(1i9,3e20.9e3)"]
+    for i, (x, y, z) in enumerate(coords, 1):
+        lines.append(f"{i:9d}{x:20.9E}{y:20.9E}{z:20.9E}")
+    lines.append("N,R5.3,LOC,      -1,")
+    return "\n".join(lines)
+
+
+def _fmt_compact_eblock(elems):
+    lines = [f"eblock,11,COMPACT,,{len(elems)}", "(11i9)"]
+    for eid, nodes in enumerate(elems, 1):
+        vals = [eid] + list(nodes)
+        for k in range(0, len(vals), 11):  # 11 fields per line, wrap
+            lines.append("".join(f"{v:9d}" for v in vals[k:k + 11]))
+    lines.append("       -1")
+    return "\n".join(lines)
+
+
+class TestCompactEblock:
+    def test_1i9_nblock_and_compact_hex(self):
+        # unit cube, SOLID185 (linear hex), COMPACT eblock, 1-integer NBLOCK
+        coords = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                  (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+        inp = (
+            "/PREP7\net,1,185\nMAT,1 $ TYPE,1 $ REAL,1\n"
+            + _fmt_1i9_nblock(coords) + "\n"
+            + _fmt_compact_eblock([list(range(1, 9))])
+        )
+        mesh = _read_from_str(inp)
+        assert len(mesh.points) == 8
+        # coordinates parsed correctly from the 1-integer NBLOCK
+        assert np.allclose(mesh.points[0], [0.0, 0.0, 0.0])
+        assert np.allclose(mesh.points[6], [1.0, 1.0, 1.0])
+        assert len(mesh.cells) == 1
+        assert mesh.cells[0].type == "hexahedron"
+        assert mesh.cells[0].data.shape == (1, 8)
+
+    def test_compact_multiline_hex20(self):
+        # SOLID186 (hex20): 20 nodes span two lines in COMPACT (11i9)
+        coords = [(float(i), 0.0, 0.0) for i in range(20)]
+        inp = (
+            "/PREP7\net,1,186\nMAT,1 $ TYPE,1 $ REAL,1\n"
+            + _fmt_1i9_nblock(coords) + "\n"
+            + _fmt_compact_eblock([list(range(1, 21))])
+        )
+        mesh = _read_from_str(inp)
+        assert mesh.cells[0].type == "hexahedron20"
+        assert mesh.cells[0].data.shape == (1, 20)
+        # elem_id stripped; 20 nodes in order (0-based)
+        assert mesh.cells[0].data[0].tolist() == list(range(20))

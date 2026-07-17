@@ -52,6 +52,12 @@ def _int_width(fmt):
     return int(m.group(2)) if m else 0
 
 
+def _int_count(fmt):
+    # number of integer fields in a block format, e.g. 3 in "(3i9,6e21...)"
+    m = re.search(r"(\d+)i(\d+)", fmt, re.IGNORECASE)
+    return int(m.group(1)) if m else 1
+
+
 def _real_width(fmt):
     m = re.search(r"(\d+)[eg](\d+)\.", fmt, re.IGNORECASE)
     return int(m.group(2)) if m else 0
@@ -116,10 +122,23 @@ def _read_lines(lines):
     etype_lib, node_id, coords, elements = {}, [], [], []
     node_comps, elem_comps = {}, {}
     saw_block = False
+    active_type = None
     i, n = 0, len(lines)
     while i < n:
         line = lines[i].strip()
         up = line.upper()
+
+        # Track the active element type. In COMPACT EBLOCKs the type is not on each
+        # element line, it is whatever the last TYPE command set. TYPE may share a
+        # line with other commands, e.g. "MAT,1 $ TYPE,1 $ REAL,1 $ SECNUM,1".
+        if "TYPE," in up:
+            for part in up.split("$"):
+                part = part.strip()
+                if part.startswith("TYPE,"):
+                    try:
+                        active_type = int(part.split(",")[1].split("!")[0])
+                    except (ValueError, IndexError):
+                        pass
 
         if up.startswith("ET,"):
             p = line.split(",")
@@ -150,6 +169,7 @@ def _read_lines(lines):
             saw_block = True
             iw = _int_width(lines[i + 1]) or 9
             rw = _real_width(lines[i + 1]) or 20
+            n_int = _int_count(lines[i + 1]) or 1
             i += 2
             while i < n:
                 l = lines[i]
@@ -168,11 +188,47 @@ def _read_lines(lines):
                     i += 1
                     break
 
-                rs = (_slice_reals(l[3 * iw:], rw) + [0.0, 0.0, 0.0])[:3]
+                rs = (_slice_reals(l[n_int * iw:], rw) + [0.0, 0.0, 0.0])[:3]
                 node_id.append(nid)
                 coords.append(rs)
                 i += 1
+        elif up.startswith("EBLOCK") and "COMPACT" in up:
+            # COMPACT EBLOCK: rows are "elem_id node1 ... nodeN" (no per-element
+            # header) and the type is the active TYPE. Read the whole block as one
+            # integer stream and split it by the element count from the header.
+            # This also handles elements that wrap across lines (e.g. a 20-node hex).
+            saw_block = True
+            parts = [p.strip() for p in up.split(",")]
+            try:
+                num_elem = int(parts[4].split("!")[0])
+            except (IndexError, ValueError):
+                num_elem = 0
+            iw = _int_width(lines[i + 1]) or 9
+            i += 2
+            flat = []
+            while i < n:
+                l = lines[i]
+                if l.strip().startswith("-1"):
+                    i += 1
+                    break
+                if not _is_data_line(l):
+                    break
+                flat += _slice_ints(l, iw)
+                i += 1
+            if num_elem and flat and len(flat) % num_elem == 0:
+                rec = len(flat) // num_elem
+                for k in range(num_elem):
+                    chunk = flat[k * rec:(k + 1) * rec]
+                    elements.append((active_type, chunk[0], chunk[1:]))
+            elif flat:
+                raise ReadError(
+                    "COMPACT EBLOCK: cannot determine node count "
+                    f"({len(flat)} integers for {num_elem} elements)."
+                )
         elif up.startswith("EBLOCK"):
+            # SOLID EBLOCK: each element line is a fixed header
+            # (material, type, ..., node count, elem_id) followed by the node
+            # numbers, which continue on the next line if they don't all fit.
             saw_block = True
             iw = _int_width(lines[i + 1]) or 9
             i += 2
