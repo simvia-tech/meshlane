@@ -1,7 +1,10 @@
+import sys
+
 import numpy as np
 
-from .._common import warn
+from .._common import error, warn
 from .._helpers import _writer_map, read, reader_map, write
+from ..med import read_med_multi, write_med_multi
 
 
 def add_args(parser):
@@ -54,11 +57,14 @@ def add_args(parser):
     )
 
 
-def convert(args):
-    # read mesh data
-    print(f"Reading '{args.infile}' (large meshes may take a while)...", flush=True)
-    mesh = read(args.infile, file_format=args.input_format)
+def _is_med(path, file_format):
+    # Only MED can hold more than one mesh in a single file.
+    if file_format is not None:
+        return file_format == "med"
+    return str(path).lower().endswith(".med")
 
+
+def _process(mesh, args):
     # Some converters (like VTK) require `points` to be contiguous.
     mesh.points = np.ascontiguousarray(mesh.points)
 
@@ -87,13 +93,35 @@ def convert(args):
         for key in mesh.cell_data:
             mesh.cell_data_to_sets(key)
 
-    # write it out
-    kwargs = {"file_format": args.output_format}
-    if args.float_format is not None:
-        kwargs["float_fmt"] = args.float_format
-    if args.ascii:
-        kwargs["binary"] = False
 
+def convert(args):
+    # read mesh data
+    print(f"Reading '{args.infile}' (large meshes may take a while)...", flush=True)
+    if _is_med(args.infile, args.input_format):
+        # a MED file may hold several meshes; read them all (also fine for one)
+        meshes, mesh_names = read_med_multi(args.infile)
+    else:
+        meshes, mesh_names = [read(args.infile, file_format=args.input_format)], None
+
+    for mesh in meshes:
+        _process(mesh, args)
+
+    # write it out
     print(f"Writing '{args.outfile}'...", flush=True)
-    write(args.outfile, mesh, **kwargs)
+    if len(meshes) > 1:
+        # more than one mesh: only MED can store them all
+        if not _is_med(args.outfile, args.output_format):
+            error(
+                f"Input has {len(meshes)} meshes, but the output format cannot hold "
+                "more than one. Convert to MED (.med) to keep all of them."
+            )
+            sys.exit(1)
+        write_med_multi(args.outfile, meshes, mesh_names=mesh_names)
+    else:
+        kwargs = {"file_format": args.output_format}
+        if args.float_format is not None:
+            kwargs["float_fmt"] = args.float_format
+        if args.ascii:
+            kwargs["binary"] = False
+        write(args.outfile, meshes[0], **kwargs)
     print("Done.")
