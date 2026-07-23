@@ -6,6 +6,19 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## meshlane 5.4.3 (Jul 23, 2026)
+
+### Added
+- CLI: `meshlane convert` handles multi-mesh MED files. Every mesh is read and
+  written out (to MED); converting to a format that cannot hold more than one
+  mesh reports a clear error. (#20)
+
+### Fixed
+- Ansys: the `.inp` reader collapses degenerate elements that ANSYS stores with
+  repeated nodes (tets/wedges/pyramids written as hexes, triangles written as
+  quads) to their real type. This fixes wrong cell types and zero-volume cells that were rejected by
+  solvers. (#22)
+
 ## meshlane 5.4.2 (Jul 17, 2026)
 
 ### Added
