@@ -3,7 +3,7 @@ Autonomous I/O for the Ansys MAPDL "coded database" format (.cdb / .inp).
 
 This module reads AND writes the format by directly parsing MAPDL blocks
 (ET/ETBLOCK, NBLOCK, EBLOCK, CMBLOCK) and converting them to/from
-the neutral pivot object meshlane.Mesh. NO external dependencies, NO passing
+the neutral pivot object meshlane.Mesh. No external dependencies nor passing
 through another format.
 
 """
@@ -46,6 +46,55 @@ _FROM_MESHIO = {
     "line": 188, "line3": 189,
 }
 
+# ANSYS contact/target elements (TARGE169/170, CONTA171-178) overlay the solid
+# faces and read as flat, zero-volume solids, so they are skipped.
+_CONTACT = {169, 170, 171, 172, 173, 174, 175, 176, 177, 178}
+
+
+def _degenerate8(n):
+    # ANSYS fills all 8 hex slots even for a tet/wedge/pyramid, repeating node
+    # ids to do it (a tet is written "I J K K M M M M"). Which slots repeat tells
+    # the real shape: return it with just its distinct nodes.
+    top = n[4] == n[5] == n[6] == n[7]
+    if top and n[2] == n[3]:
+        return "tetra", [n[0], n[1], n[2], n[4]]
+    if top:
+        return "pyramid", [n[0], n[1], n[2], n[3], n[4]]
+    if n[2] == n[3] and n[6] == n[7]:
+        return "wedge", [n[0], n[1], n[2], n[4], n[5], n[6]]
+    return "hexahedron", n
+
+
+def _degenerate20(n):
+    # The quadratic twin of _degenerate8: n[0:8] are corners, n[8:20] the 12
+    # edge midpoints. Corners fold the same way and keep each real edge's
+    # midpoint, taken from ANSYS's edge order (bottom 8-11, top 12-15,
+    # verticals 16-19).
+    top = n[4] == n[5] == n[6] == n[7]
+    if top and n[2] == n[3]:
+        return "tetra10", [n[0], n[1], n[2], n[4],
+                           n[8], n[9], n[11], n[16], n[17], n[18]]
+    if top:
+        return "pyramid13", [n[0], n[1], n[2], n[3], n[4],
+                             n[8], n[9], n[10], n[11], n[16], n[17], n[18], n[19]]
+    if n[2] == n[3] and n[6] == n[7]:
+        return "wedge15", [n[0], n[1], n[2], n[4], n[5], n[6],
+                           n[8], n[9], n[11], n[12], n[13], n[15],
+                           n[16], n[17], n[18]]
+    return "hexahedron20", n
+
+
+def _degenerate_quad(n):
+    # ANSYS writes a triangular shell/plane as a quad with a repeated corner
+    # (node 3 = node 4). 4 nodes -> triangle, 8 nodes -> triangle6.
+    if len(n) == 4:
+        if n[2] == n[3]:
+            return "triangle", [n[0], n[1], n[2]]
+        return "quad", n
+    if n[2] == n[3]:
+        return "triangle6", [n[0], n[1], n[2], n[4], n[5], n[7]]
+    return "quad8", n
+
 
 def _int_width(fmt):
     m = re.search(r"(\d+)i(\d+)", fmt, re.IGNORECASE)
@@ -61,6 +110,16 @@ def _int_count(fmt):
 def _real_width(fmt):
     m = re.search(r"(\d+)[eg](\d+)\.", fmt, re.IGNORECASE)
     return int(m.group(2)) if m else 0
+
+
+def _resolve_int(tok, params):
+    # An ET/TYPE token may be a literal (e.g. "185"), or a *SET name (e.g."tid").
+    # Return its int value, or None if the name was never set.
+    tok = tok.split("!")[0].strip()
+    try:
+        return int(float(tok))
+    except ValueError:
+        return params.get(tok.upper())
 
 
 def _slice_ints(line, width):
@@ -121,6 +180,7 @@ def read(filename):
 def _read_lines(lines):
     etype_lib, node_id, coords, elements = {}, [], [], []
     node_comps, elem_comps = {}, {}
+    params = {}
     saw_block = False
     active_type = None
     i, n = 0, len(lines)
@@ -140,13 +200,22 @@ def _read_lines(lines):
                     except (ValueError, IndexError):
                         pass
 
-        if up.startswith("ET,"):
+        if up.startswith("*SET,"):
+            # APDL parameter (e.g. *set,tid,4), so ET lines can name a type by
+            # parameter, like "et,tid,170".
             p = line.split(",")
             if len(p) >= 3:
-                try:
-                    etype_lib[int(p[1])] = int(float(p[2]))
-                except ValueError:
-                    pass
+                val = _resolve_int(p[2], params)
+                if val is not None:
+                    params[p[1].strip().upper()] = val
+            i += 1
+        elif up.startswith("ET,"):
+            p = line.split(",")
+            if len(p) >= 3:
+                tid = _resolve_int(p[1], params)
+                num = _resolve_int(p[2], params)
+                if tid is not None and num is not None:
+                    etype_lib[tid] = num
             i += 1
         elif up.startswith("ETBLOCK"):
             saw_block = True
@@ -294,12 +363,21 @@ def _read_lines(lines):
     return _build_mesh(etype_lib, node_id, coords, elements, node_comps, elem_comps)
 
 
-def _meshio_type(etype_lib, etype_local, nnodes):
-    family = _FAMILY.get(etype_lib.get(etype_local), "solid")
-    key = (family, nnodes)
+def _resolve_type(ansys_num, nodes):
+    # Element type from (family, node count). Degenerate elements (shapes ANSYS
+    # stores with repeated nodes) collapse to their real type: solids to
+    # tet/wedge/pyramid, shells/planes to triangle.
+    family = _FAMILY.get(ansys_num, "solid")
+    if family == "solid" and len(nodes) == 8:
+        return _degenerate8(nodes)
+    if family == "solid" and len(nodes) == 20:
+        return _degenerate20(nodes)
+    if family in ("shell", "plane") and len(nodes) in (4, 8):
+        return _degenerate_quad(nodes)
+    key = (family, len(nodes))
     if key not in _TO_MESHIO:
-        raise ReadError(f"Unsupported type: etype {etype_local} with {nnodes} nodes.")
-    return _TO_MESHIO[key]
+        raise ReadError(f"Unsupported type: Ansys {ansys_num} with {len(nodes)} nodes.")
+    return _TO_MESHIO[key], nodes
 
 
 def _build_mesh(etype_lib, node_id, coords, elements, node_comps, elem_comps):
@@ -307,7 +385,10 @@ def _build_mesh(etype_lib, node_id, coords, elements, node_comps, elem_comps):
     nid_to_index = {nid: k for k, nid in enumerate(node_id)}
     blocks, eid_to_loc = {}, {}
     for etype_local, elem_id, nodes in elements:
-        mtype = _meshio_type(etype_lib, etype_local, len(nodes))
+        ansys_num = etype_lib.get(etype_local)
+        if ansys_num in _CONTACT:
+            continue  # drop ANSYS contact/target overlays (see _CONTACT)
+        mtype, nodes = _resolve_type(ansys_num, nodes)
         blocks.setdefault(mtype, [])
         eid_to_loc[elem_id] = (mtype, len(blocks[mtype]))
         blocks[mtype].append([nid_to_index[x] for x in nodes])

@@ -510,3 +510,90 @@ class TestCompactEblock:
         assert mesh.cells[0].data.shape == (1, 20)
         # elem_id stripped; 20 nodes in order (0-based)
         assert mesh.cells[0].data[0].tolist() == list(range(20))
+
+
+# Tests: ANSYS degenerate solids (tet/wedge/pyramid stored as hexes) and
+# contact/target element skipping.
+
+class TestDegenerateAndContact:
+    def _deck(self, coords, ansys_num, conn):
+        return (
+            f"/PREP7\net,1,{ansys_num}\nMAT,1 $ TYPE,1 $ REAL,1\n"
+            + _fmt_1i9_nblock(coords) + "\n"
+            + _fmt_compact_eblock(conn)
+        )
+
+    def test_degenerate_hex_to_tetra(self):
+        # SOLID185 tet stored as "I J K K M M M M"
+        coords = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+        mesh = _read_from_str(self._deck(coords, 185, [[1, 2, 3, 3, 4, 4, 4, 4]]))
+        assert len(mesh.cells) == 1
+        assert mesh.cells[0].type == "tetra"
+        assert mesh.cells[0].data[0].tolist() == [0, 1, 2, 3]
+
+    def test_degenerate_hex_to_wedge(self):
+        # SOLID185 wedge stored as "I J K K M N O O" (K=L and O=P)
+        coords = [(0, 0, 0), (1, 0, 0), (0, 1, 0),
+                  (0, 0, 1), (1, 0, 1), (0, 1, 1)]
+        mesh = _read_from_str(self._deck(coords, 185, [[1, 2, 3, 3, 4, 5, 6, 6]]))
+        assert mesh.cells[0].type == "wedge"
+        assert mesh.cells[0].data[0].tolist() == [0, 1, 2, 3, 4, 5]
+
+    def test_degenerate_hex_to_pyramid(self):
+        # SOLID185 pyramid stored as "I J K L M M M M" (M=N=O=P)
+        coords = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (0.5, 0.5, 1)]
+        mesh = _read_from_str(self._deck(coords, 185, [[1, 2, 3, 4, 5, 5, 5, 5]]))
+        assert mesh.cells[0].type == "pyramid"
+        assert mesh.cells[0].data[0].tolist() == [0, 1, 2, 3, 4]
+
+    def test_genuine_hex_stays_hex(self):
+        # 8 distinct corner nodes must remain a hexahedron (no false collapse)
+        coords = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                  (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+        mesh = _read_from_str(self._deck(coords, 185, [list(range(1, 9))]))
+        assert mesh.cells[0].type == "hexahedron"
+
+    def test_contact_elements_skipped(self):
+        # A hex plus a CONTA174 contact patch, where the contact type is declared
+        # via an APDL parameter ("*set,cid,3" + "et,cid,174"). The patch must be
+        # dropped, and *set/label resolution must work (otherwise the patch would
+        # be misread as a solid tetra).
+        coords = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                  (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+        inp = "\n".join([
+            "/PREP7",
+            "*set,cid,3",
+            "et,1,185",
+            "et,cid,174",
+            _fmt_1i9_nblock(coords),
+            "MAT,1 $ TYPE,1 $ REAL,1",
+            _fmt_compact_eblock([list(range(1, 9))]),   # solid hex
+            "MAT,3 $ TYPE,3 $ REAL,3",
+            _fmt_compact_eblock([[1, 2, 3, 4]]),        # CONTA174 patch -> skipped
+        ])
+        mesh = _read_from_str(inp)
+        assert len(mesh.cells) == 1
+        assert mesh.cells[0].type == "hexahedron"
+        assert "tetra" not in {c.type for c in mesh.cells}
+
+    def test_degenerate_hex20_to_tetra10_midpoints(self):
+        # A curved SOLID186 tet stored as a degenerate 20-node hex. The recovered
+        # tetra10 must place each midside node at the midpoint of its edge, which
+        # validates the ANSYS hex20 -> tetra10 node mapping geometrically.
+        coords = [
+            (0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2),    # 1..4 corners I,J,K,M
+            (1, 0, 0), (1, 1, 0), (0, 1, 0),               # 5,6,7 = IJ, JK, KI
+            (0, 0, 1), (1, 0, 1), (0, 1, 1),               # 8,9,10 = IM, JM, KM
+        ]
+        conn = [[1, 2, 3, 3, 4, 4, 4, 4,
+                 5, 6, 3, 7, 4, 4, 4, 4, 8, 9, 10, 10]]
+        mesh = _read_from_str(self._deck(coords, 186, conn))
+        assert mesh.cells[0].type == "tetra10"
+        assert mesh.cells[0].data.shape == (1, 10)
+        c = mesh.points[mesh.cells[0].data[0]]
+        assert np.allclose(c[4], (c[0] + c[1]) / 2)   # edge (0,1)
+        assert np.allclose(c[5], (c[1] + c[2]) / 2)   # edge (1,2)
+        assert np.allclose(c[6], (c[2] + c[0]) / 2)   # edge (2,0)
+        assert np.allclose(c[7], (c[0] + c[3]) / 2)   # edge (0,3)
+        assert np.allclose(c[8], (c[1] + c[3]) / 2)   # edge (1,3)
+        assert np.allclose(c[9], (c[2] + c[3]) / 2)   # edge (2,3)
