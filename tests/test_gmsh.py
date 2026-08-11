@@ -1,6 +1,7 @@
 import copy
 import pathlib
 from functools import partial
+import textwrap
 
 import numpy as np
 import pytest
@@ -180,22 +181,35 @@ def test_reference_file_with_entities(
 
     helpers.write_read(tmp_path, writer, meshlane.gmsh.read, mesh, 1.0e-15)
 
+
 def test_convert_med_to_msh_preserves_metadata(tmp_path):
     """MED to MSH conversion must preserve tags and field_data."""
     from meshlane._mesh import CellBlock
     from meshlane.gmsh.main import _convert_med_tags_to_gmsh
 
-    points = np.array([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [2.0, 0.0],
-        [2.0, 1.0],
-    ])
+    points = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+        ]
+    )
 
     cells = [
-        CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2], [1, 4, 5], [1, 5, 3]])),
+        CellBlock(
+            "triangle",
+            np.array(
+                [
+                    [0, 1, 2],
+                    [1, 3, 2],
+                    [1, 4, 5],
+                    [1, 5, 3],
+                ]
+            ),
+        ),
     ]
 
     # Simulate MED data: 2 families, 2 geometric groups
@@ -233,3 +247,59 @@ def test_convert_med_to_msh_preserves_metadata(tmp_path):
     # field_data must be reconstructed
     assert "group_a" in converted.field_data
     assert "group_b" in converted.field_data
+
+
+def test_gmsh_wedge18_node_order(tmp_path):
+    """Gmsh prism18 (element type 13) node order, from the reference-element coordinates
+    gmsh.model.mesh.getElementProperties(13) reports, matched against meshlane's:
+      6 corners, 9 edge nodes, then the 3 quadrilateral face nodes.
+    A write/read round-trip cannot check this mapping, since writing and reading apply
+    permutations that are inverses of one another and cancel out. So read a file laid out
+    the way gmsh writes one and check where the nodes land.
+    """
+
+    path = tmp_path / "wedge18.msh"
+    path.write_text(textwrap.dedent("""\
+        $MeshFormat
+        2.2 0 8
+        $EndMeshFormat
+        $Nodes
+        18
+        1 0.0 0.0 0.0
+        2 1.0 0.0 0.0
+        3 0.0 1.0 0.0
+        4 0.0 0.0 1.0
+        5 1.0 0.0 1.0
+        6 0.0 1.0 1.0
+        7 0.5 0.0 0.0
+        8 0.5 0.5 0.0
+        9 0.0 0.5 0.0
+        10 0.5 0.0 1.0
+        11 0.5 0.5 1.0
+        12 0.0 0.5 1.0
+        13 0.0 0.0 0.5
+        14 1.0 0.0 0.5
+        15 0.0 1.0 0.5
+        16 0.5 0.0 0.5
+        17 0.5 0.5 0.5
+        18 0.0 0.5 0.5
+        $EndNodes
+        $Elements
+        1
+        1 13 2 0 1 1 2 3 4 5 6 7 9 13 8 14 15 10 12 11 16 18 17
+        $EndElements
+        """))
+
+    mesh = meshlane.gmsh.read(path)
+
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == "wedge18"
+
+    p = mesh.points[np.asarray(mesh.cells[0].data)[0]]
+    edges = [(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3), (0, 3), (1, 4), (2, 5)]
+    faces = [(0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5)]
+
+    for k, (a, b) in enumerate(edges):
+        assert np.allclose(p[6 + k], (p[a] + p[b]) / 2), f"edge node {6 + k}"
+    for k, face in enumerate(faces):
+        assert np.allclose(p[15 + k], p[list(face)].mean(axis=0)), f"face node {15 + k}"
