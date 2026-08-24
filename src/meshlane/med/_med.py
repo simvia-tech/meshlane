@@ -92,6 +92,18 @@ def _med_group_key(cell_type):
 
 numpy_void_str = np.bytes_("")
 
+
+def _med_str(raw):
+    # MED stores text as 8-bit char arrays. Decode as UTF-8 (what Salome and
+    # code_aster write and expect), falling back to Latin-1 for older files.
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = bytes((int(x) & 0xFF) for x in np.asarray(raw).ravel())
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
 MED_FLOAT32 = 4
 MED_FLOAT64 = 6
 MED_INT32 = 24
@@ -371,9 +383,9 @@ def read(filename):
         raise ReadError(f"Must only contain exactly 1 mesh, found {len(meshes)}.")
     mesh_name = list(meshes)[0]
     mesh = mesh_ensemble[mesh_name]
-    mesh_description = mesh.attrs.get("DES", b"").decode("latin-1").strip().rstrip("\x00")
-    mesh_unit_time   = mesh.attrs.get("UNT", b"").decode("latin-1").strip().rstrip("\x00")
-    mesh_unit_coords = mesh.attrs.get("UNI", b"").decode("latin-1").strip().rstrip("\x00")
+    mesh_description = _med_str(mesh.attrs.get("DES", b"")).strip().rstrip("\x00")
+    mesh_unit_time   = _med_str(mesh.attrs.get("UNT", b"")).strip().rstrip("\x00")
+    mesh_unit_coords = _med_str(mesh.attrs.get("UNI", b"")).strip().rstrip("\x00")
 
     dim = mesh.attrs["ESP"]
 
@@ -692,7 +704,7 @@ def _read_families(fas_data):
         nom_dataset = node_set["GRO"]["NOM"][()]
         name = [None] * n_subsets
         for i in range(n_subsets):
-            name[i] = "".join([chr(x) for x in nom_dataset[i]]).strip().rstrip("\x00")
+            name[i] = _med_str(nom_dataset[i]).strip().rstrip("\x00")
         families[set_id] = name
         group_names[set_id] = group_name
     return families, group_names
@@ -735,13 +747,13 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     desc = getattr(mesh, "description", None)
     if not desc:
         desc = "Mesh created with meshlane"
-    med_mesh.attrs.create("UNT", np.bytes_(unt.encode("latin-1")) if unt else numpy_void_str)
-    med_mesh.attrs.create("UNI", np.bytes_(uni.encode("latin-1")) if uni else numpy_void_str)
+    med_mesh.attrs.create("UNT", np.bytes_(unt.encode("utf-8")) if unt else numpy_void_str)
+    med_mesh.attrs.create("UNI", np.bytes_(uni.encode("utf-8")) if uni else numpy_void_str)
     med_mesh.attrs.create("SRT", 1)  # sorting type MED_SORT_ITDT
     # component names:
     names = ["X", "Y", "Z"][: mesh.points.shape[1]]
     med_mesh.attrs.create("NOM", np.bytes_("".join(f"{name:<16}" for name in names)))
-    med_mesh.attrs.create("DES", np.bytes_(desc.encode("latin-1")))
+    med_mesh.attrs.create("DES", np.bytes_(desc.encode("utf-8")))
     med_mesh.attrs.create("TYP", 0)  # mesh type (MED_NON_STRUCTURE)
 
     # Time-step
@@ -1190,7 +1202,7 @@ def _write_families(fm_group, tags, group_names=None):
         # <= MED_NAME_SIZE (64) octets. Les libellés lisibles sont
         # stockés dans GRO/NOM, pas ici.
         gname = gname.replace("/", "_")
-        if len(gname.encode("latin-1", "replace")) > 64:
+        if len(gname.encode("utf-8", "replace")) > 64:
             gname = f"FAM_{set_id}"
         family = fm_group.create_group(gname, track_order=True)
         family.attrs.create("NUM", set_id)
@@ -1206,7 +1218,7 @@ def _write_families(fm_group, tags, group_names=None):
         )
         buf = np.full((len(name), 80), ord(" "), dtype="i1")
         for i, n in enumerate(name):
-            name_bytes = n.encode("latin-1", "replace")
+            name_bytes = n.encode("utf-8", "replace")
             if len(name_bytes) > 80:
                 raise WriteError(
                     f"Family name '{n}' is too long for MED format (max 80 bytes)."

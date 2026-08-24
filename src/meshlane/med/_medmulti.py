@@ -35,6 +35,7 @@ from ._med import (
     numpy_to_med_type,
     numpy_void_str,
     MED_FLOAT64,
+    _med_str,
     _reorder_med_cells,
     _write_families,
     _read_families,
@@ -111,7 +112,7 @@ def _bytes_attr(value, fallback=numpy_void_str):
         return fallback
     if isinstance(value, (bytes, np.bytes_)):
         return np.bytes_(value)
-    return np.bytes_(str(value).encode("latin-1"))
+    return np.bytes_(str(value).encode("utf-8"))
 
 
 def _create_field_group(fields, hdf5_name, mesh_name, first_data,
@@ -432,9 +433,9 @@ def _read_single_mesh(f, name):
     dim = mesh_grp.attrs["ESP"]
 
     # metadata read from the top mesh group (before descending into a step)
-    description = mesh_grp.attrs.get("DES", b"").decode("latin-1").strip().rstrip("\x00")
-    unit_time = mesh_grp.attrs.get("UNT", b"").decode("latin-1").strip().rstrip("\x00")
-    unit_coords = mesh_grp.attrs.get("UNI", b"").decode("latin-1").strip().rstrip("\x00")
+    description = _med_str(mesh_grp.attrs.get("DES", b"")).strip().rstrip("\x00")
+    unit_time = _med_str(mesh_grp.attrs.get("UNT", b"")).strip().rstrip("\x00")
+    unit_coords = _med_str(mesh_grp.attrs.get("UNI", b"")).strip().rstrip("\x00")
 
     if "NOE" not in mesh_grp:
         time_step = list(mesh_grp.keys())
