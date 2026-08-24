@@ -118,6 +118,26 @@ def test_skip_non_mesh_elements(tmp_path):
     assert {c.type for c in mesh.cells} == {"tetra"}
 
 
+def test_write_canonical_element_types(tmp_path):
+    # the writer must emit the plain canonical Abaqus types, not the R/H variants
+    # a naive reverse map produces (hexahedron->C3D8RH, quad->CAX4P, line->B31H).
+    points = np.zeros((8, 3))
+    cells = [
+        ("hexahedron", np.arange(8).reshape(1, 8)),
+        ("quad", np.arange(4).reshape(1, 4)),
+        ("line", np.arange(2).reshape(1, 2)),
+    ]
+    mesh = meshlane.Mesh(points, cells)
+    f = tmp_path / "canon.inp"
+    meshlane.abaqus.write(f, mesh)
+    types = {
+        line.split("TYPE=")[1].strip()
+        for line in f.read_text().splitlines()
+        if line.startswith("*ELEMENT")
+    }
+    assert types == {"C3D8", "S4", "B31"}
+
+
 def test_unknown_type_warns_and_skips(tmp_path, capsys):
     # an unrecognized type is skipped with a warning, the rest still reads
     body = (

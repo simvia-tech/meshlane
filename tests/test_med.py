@@ -1211,6 +1211,30 @@ def test_med_multi_write_read_two_meshes(tmp_path):
     )
 
 
+def test_med_multi_preserves_groups(tmp_path):
+    """
+    read_med_multi must reconstruct point_sets/cell_sets from MED families,
+    like the single-mesh reader. Regression: the CLI convert path uses
+    read_med_multi, and previously dropped all groups (issues #25/#29).
+    """
+    from meshlane._mesh import Mesh, CellBlock
+
+    mesh = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2]]))],
+        point_sets={"corner": np.array([0])},
+        cell_sets={"right": [np.array([0])], "left": [np.array([1])]},
+    )
+    filename = tmp_path / "grp.med"
+    meshlane.med.write(filename, mesh)
+
+    meshes, _ = meshlane.med.read_med_multi(filename)
+    out = meshes[0]
+
+    assert set(out.point_sets) == {"corner"}
+    assert set(out.cell_sets) == {"right", "left"}
+
+
 def test_med_multi_default_mesh_names(tmp_path):
     """
     Without explicit mesh_names, meshes must be named mesh_0, mesh_1, etc.
