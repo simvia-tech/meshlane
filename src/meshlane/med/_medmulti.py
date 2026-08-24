@@ -39,6 +39,8 @@ from ._med import (
     _reorder_med_cells,
     _write_families,
     _read_families,
+    _families_to_point_sets,
+    _families_to_cell_sets,
     _read_data,
     _parse_med_field_name,
     _write_field_step,
@@ -516,11 +518,20 @@ def _read_single_mesh(f, name):
                 field_data,
             )
 
+    # Reconstruct point_sets / cell_sets from MED families (same as the
+    # single-mesh reader) so the CLI convert path preserves groups too.
+    point_sets = _families_to_point_sets(point_tags, point_data.get("point_tags"))
+    cell_sets = _families_to_cell_sets(
+        cell_tags, cell_data.get("cell_tags"), len(cells)
+    )
+
     result = Mesh(
         points, cells,
         point_data=point_data,
         cell_data=cell_data,
         field_data=field_data,
+        point_sets=point_sets,
+        cell_sets=cell_sets,
     )
     result.point_tags = point_tags
     result.cell_tags = cell_tags

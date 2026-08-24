@@ -91,7 +91,26 @@ abaqus_to_meshio_type = {
     # 6-node quadratic
     "CPE6": "triangle6",
 }
-meshio_to_abaqus_type = {v: k for k, v in abaqus_to_meshio_type.items()}
+# Explicit write map with the canonical (plain) Abaqus type per meshio type.
+# A plain reverse of abaqus_to_meshio_type would keep the *last* key seen per
+# value, which yields non-canonical names (hexahedron -> C3D8RH, quad -> CAX4P,
+# line -> B31H). Every name below is also a key above, so writing round-trips.
+meshio_to_abaqus_type = {
+    "line": "B31",
+    "line3": "B32",
+    "triangle": "S3",
+    "triangle6": "STRI65",
+    "quad": "S4",
+    "quad8": "S8R",
+    "quad9": "S9R5",
+    "tetra": "C3D4",
+    "tetra4": "C3D4",
+    "tetra10": "C3D10",
+    "wedge": "C3D6",
+    "wedge15": "C3D15",
+    "hexahedron": "C3D8",
+    "hexahedron20": "C3D20",
+}
 
 # Read-only aliases: thermal (DC*), acoustic (AC*) and gasket (GK*) elements
 # share geometry with the displacement families. Added *after* the reverse map
