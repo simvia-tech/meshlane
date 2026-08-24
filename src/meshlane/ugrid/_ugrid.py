@@ -145,7 +145,9 @@ def read_buffer(f, file_type):
 def _write_section(f, file_type, array, dtype):
     if file_type["type"] == "ascii":
         ncols = array.shape[1]
-        fmt = " ".join(["%r"] * ncols)
+        # %s (not %r): numpy 2 changed scalar repr to "np.float64(...)"; str
+        # still yields the round-trippable plain value.
+        fmt = " ".join(["%s"] * ncols)
         np.savetxt(f, array, fmt=fmt)
     else:
         array.astype(dtype).tofile(f)
