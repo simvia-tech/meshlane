@@ -418,7 +418,8 @@ def _write_data(fh, tag, name, data, binary):
         data = data[:, 0]
 
     # Actually write the data
-    fmt = " ".join(["{}"] + ["{!r}"] * num_components) + "\n"
+    # {} (not {!r}): numpy 2 scalar repr is "np.float64(...)"; str round-trips.
+    fmt = " ".join(["{}"] + ["{}"] * num_components) + "\n"
     # TODO unify
     if num_components == 1:
         for k, x in enumerate(data):

@@ -7,7 +7,7 @@ name = "meshlane"
 version = "5.4.3"
 description = "I/O for many mesh formats"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {file = "LICENSE.txt"}
 keywords = [
   "mesh",
@@ -30,8 +30,6 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -40,7 +38,7 @@ classifiers = [
 ]
 dependencies = [
   "importlib_metadata; python_version<'3.8'",
-  "numpy>=1.20.0,<2",
+  "numpy>=1.20.0",
   "rich",
 ]
 
