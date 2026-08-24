@@ -6,6 +6,27 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## meshlane 5.5.0 (Aug 24, 2026)
+
+### Added
+- numpy 2.x support: the `numpy<2` upper cap is removed, so meshlane runs on both
+  numpy 1.20+ and numpy 2.x. (#31)
+
+### Changed
+- **Minimum Python is now 3.10** (3.8 and 3.9 dropped). Both are end-of-life, and
+  numpy 2.x requires Python 3.10+. (#31)
+
+### Fixed
+- MED to Abaqus `.inp` via the CLI (`meshlane convert`) now preserves node and
+  element groups (`*NSET`/`*ELSET`) as the multi-mesh read path previously dropped
+  them. Element types are also written canonically (`C3D8`, `S4`, `B31`) instead
+  of non-standard variants (`C3D8RH`, `CAX4P`, `B31H`). (#33, #25, #29)
+- MED: text metadata (group names, units, description) is written as UTF-8, so
+  Salome and code_aster read accented names correctly. (#32)
+- Abaqus: the reader maps thermal and gasket element families, reads
+  assembly-based input files (`*Part`/`*Instance`), and uses less memory on large
+  files. (#30)
+
 ## meshlane 5.4.3 (Jul 23, 2026)
 
 ### Added
