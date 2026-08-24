@@ -1142,13 +1142,14 @@ def test_step_metadata_roundtrip(tmp_path):
             )
 
 
-def test_metadata_latin1_roundtrip(tmp_path):
-    """Non-ASCII Latin-1 metadata (µm, °C, French accents) must round-trip.
-    MED stores strings as 8-bit char arrays, so Latin-1 is the supported
-    encoding. Plain ASCII and Latin-1 supplements must both be preserved
-    without UnicodeEncodeError on write.
+def test_metadata_utf8_roundtrip(tmp_path):
+    """Non-ASCII metadata (µm, French accents) must round-trip and be stored as
+    UTF-8, so external readers (like Salome 9, code_aster, etc.) accept it. Latin-1
+    bytes (e.g. é = 0xE9) crash some solvers UTF-8 decoding.
     """
-    filename = tmp_path / "latin1.med"
+    import h5py
+
+    filename = tmp_path / "utf8.med"
     mesh = copy.deepcopy(helpers.tri_mesh)
     mesh.unit_coords = "µm"
     mesh.unit_time = "µs"
@@ -1160,6 +1161,13 @@ def test_metadata_latin1_roundtrip(tmp_path):
     assert out.unit_coords == "µm"
     assert out.unit_time == "µs"
     assert out.description == "Maillage généré par Salome"
+
+    # stored as UTF-8 (é -> 0xC3 0xA9)
+    with h5py.File(filename, "r") as f:
+        name = list(f["ENS_MAA"].keys())[0]
+        des = bytes(f["ENS_MAA"][name].attrs["DES"])
+    assert b"\xc3\xa9" in des
+    assert des.decode("utf-8").startswith("Maillage")
 
 
 def test_med_multi_write_read_two_meshes(tmp_path):
