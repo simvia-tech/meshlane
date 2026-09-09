@@ -1,4 +1,6 @@
+import copy
 import pathlib
+import textwrap
 
 import numpy as np
 import pytest
@@ -19,11 +21,138 @@ from . import helpers
         helpers.tri_quad_mesh,
         helpers.tet_mesh,
         helpers.hex_mesh,
+        # higher-order cells
+        helpers.line3_mesh,
+        helpers.line4_mesh,
+        helpers.line5_mesh,
+        helpers.triangle6_mesh,
+        helpers.triangle10_mesh,
+        helpers.triangle15_mesh,
+        helpers.quad9_mesh,
+        helpers.tet10_mesh,
+        helpers.wedge18_mesh,
+        helpers.hex27_mesh,
         helpers.add_cell_data(helpers.tri_mesh, [("medit:ref", (), int)]),
     ],
 )
-def test_io(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshlane.medit.write, meshlane.medit.read, mesh, 1.0e-15)
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+def test_io(mesh, extension, tmp_path):
+    helpers.write_read(
+        tmp_path,
+        meshlane.medit.write,
+        meshlane.medit.read,
+        mesh,
+        1.0e-15,
+        extension=extension,
+    )
+
+
+def test_read_ascii_variants(tmp_path):
+    """MeshVersionFormatted 3, SubDomainFromGeom and an uppercase END used to raise; Hexaedra (Dobrzynski's spelling) already worked."""
+    path = tmp_path / "variants.mesh"
+    path.write_text(textwrap.dedent("""\
+        MeshVersionFormatted 3
+        Dimension
+        3
+        Vertices
+        8
+        0 0 0 1
+        1 0 0 1
+        1 1 0 1
+        0 1 0 1
+        0 0 1 1
+        1 0 1 1
+        1 1 1 1
+        0 1 1 1
+        Hexaedra
+        1
+        1 2 3 4 5 6 7 8 4
+        SubDomainFromGeom
+        1
+        3 1 0 0
+        END
+        """))
+
+    mesh = meshlane.medit.read(path)
+
+    assert mesh.points.shape == (8, 3)
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == "hexahedron"
+    assert np.array_equal(mesh.cells[0].data, [np.arange(8)])
+    assert np.array_equal(mesh.cell_data["medit:ref"][0], [4])
+
+
+def test_read_ascii_skips_ordering_sections(tmp_path):
+    """<Keyword>Ordering sections are skipped metadata; TrianglesP2Ordering also checks the keyword-with-digits guard doesn't misfire."""
+    path = tmp_path / "ordering.mesh"
+    path.write_text(textwrap.dedent("""\
+        MeshVersionFormatted 2
+        Dimension
+        2
+        Vertices
+        6
+        0 0 1
+        1 0 1
+        0 1 1
+        0.5 0 1
+        0.5 0.5 1
+        0 0.5 1
+        TrianglesP2
+        1
+        1 2 3 4 5 6 1
+        TrianglesP2Ordering
+        6
+        2 0 0
+        0 2 0
+        0 0 2
+        1 1 0
+        0 1 1
+        1 0 1
+        End
+        """))
+
+    mesh = meshlane.medit.read(path)
+
+    assert len(mesh.cells) == 1
+    assert mesh.cells[0].type == "triangle6"
+    assert np.array_equal(mesh.cells[0].data, [np.arange(6)])
+
+
+def test_read_ascii_rejects_desynchronised_stream(tmp_path):
+    """A line that is not a keyword means a section was read with the wrong cell size."""
+    path = tmp_path / "broken.mesh"
+    path.write_text(textwrap.dedent("""\
+        MeshVersionFormatted 2
+        Dimension
+        2
+        Vertices
+        1
+        0 0 1
+        1 2 3
+        End
+        """))
+
+    with pytest.raises(meshlane.ReadError, match="Expected a keyword"):
+        meshlane.medit.read(path)
+
+
+@pytest.mark.parametrize("mesh", [helpers.quad8_mesh, helpers.hex20_mesh])
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+def test_cells_without_medit_equivalent_are_skipped(mesh, extension, tmp_path, capsys):
+    """quad8, wedge15 and hexahedron20 have no Medit keyword."""
+    path = tmp_path / f"test{extension}"
+    meshlane.medit.write(path, mesh)
+    assert "doesn't know" in capsys.readouterr().err
+    assert len(meshlane.medit.read(path).cells) == 0
+
+
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+def test_write_does_not_modify_input_mesh(extension, tmp_path):
+    """Writing must not reorder the caller's cells (hexahedron27 is permuted on write)."""
+    mesh = copy.deepcopy(helpers.hex27_mesh)
+    before = mesh.cells[0].data.copy()
+    meshlane.medit.write(tmp_path / f"test{extension}", mesh)
+    assert np.array_equal(before, mesh.cells[0].data)
 
 
 def test_generic_io(tmp_path):
