@@ -32,6 +32,7 @@ from . import helpers
         helpers.tet10_mesh,
         helpers.wedge18_mesh,
         helpers.hex27_mesh,
+        helpers.pyramid14_mesh,
         helpers.add_cell_data(helpers.tri_mesh, [("medit:ref", (), int)]),
     ],
 )
@@ -264,3 +265,42 @@ def test_reference_file(
     assert tags.keys() == ref_tag_counts.keys()
     for key in tags.keys():
         assert tags[key] == ref_tag_counts[key]
+
+
+@pytest.mark.parametrize(
+    "filename, cell_type, num_nodes_per_cell",
+    [
+        ("triangle_p1.mesh", "triangle", 3),
+        ("triangle_p2.mesh", "triangle6", 6),
+        ("triangle_p3.mesh", "triangle10", 10),
+        ("triangle_p4.mesh", "triangle15", 15),
+        ("quad_q1.mesh", "quad", 4),
+        ("quad_q2.mesh", "quad9", 9),
+        ("tetra_p1.mesh", "tetra", 4),
+        ("tetra_p2.mesh", "tetra10", 10),
+        ("prism_p1.mesh", "wedge", 6),
+        ("prism_p2.mesh", "wedge18", 18),
+        ("hex_q1.mesh", "hexahedron", 8),
+        ("hex_q2.mesh", "hexahedron27", 27),
+        ("pyramid_p1.mesh", "pyramid", 5),
+        ("pyramid_p2.mesh", "pyramid14", 14),
+    ],
+)
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+def test_vizir_reference_element(filename, cell_type, num_nodes_per_cell, extension, tmp_path):
+    """ViZiR4 reference elements (https://pyamg.saclay.inria.fr/vizir4examples.html, Inria); round-tripping catches writer permutation bugs like hexahedron27's that a shape-only check would miss."""
+    this_dir = pathlib.Path(__file__).resolve().parent
+    mesh = meshlane.read(this_dir / "meshes" / "medit" / filename)
+
+    matches = [c for c in mesh.cells if c.type == cell_type]
+    assert len(matches) == 1
+    assert matches[0].data.shape == (1, num_nodes_per_cell)
+
+    roundtrip_path = tmp_path / f"roundtrip{extension}"
+    meshlane.medit.write(roundtrip_path, mesh)
+    roundtrip_mesh = meshlane.medit.read(roundtrip_path)
+
+    roundtrip_matches = [c for c in roundtrip_mesh.cells if c.type == cell_type]
+    assert len(roundtrip_matches) == 1
+    assert np.array_equal(roundtrip_matches[0].data, matches[0].data)
+    assert np.allclose(roundtrip_mesh.points, mesh.points)

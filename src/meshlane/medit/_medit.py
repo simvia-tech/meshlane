@@ -37,6 +37,7 @@ DICT_MESHLANE: dict[str, tuple[str, int, int]] = {
     # "wedge15": (_, 15, _), # not on medit!
     "wedge18": ("PrismsP2", 18, 86),
     "pyramid": ("Pyramids", 5, 49),
+    "pyramid14": ("PyramidsP2", 14, 87),
     "hexahedron": ("Hexahedra", 8, 10),  # Frey
     # "hexahedron20": (_, 20, _), # not on medit!
     "hexahedron27": ("HexahedraQ2", 27, 33),
@@ -94,7 +95,11 @@ def _produce_dtype(string_type, dim, itype, ftype):
 
 
 # Node order vs. medit's HexahedraQ2, checked against ViZiR4's HexQ2.mesh.
-_medit_to_meshlane = {"hexahedron27": [*list(range(20)), 25, 23, 22, 24, 20, 21, 26]}
+_medit_to_meshlane = {
+    "hexahedron27": [*list(range(20)), 25, 23, 22, 24, 20, 21, 26],
+    # Node order vs. medit's PyramidsP2, checked against ViZiR4's pyramid_p2.mesh.
+    "pyramid14": [0, 1, 2, 3, 4, 5, 8, 9, 6, 10, 7, 11, 12, 13],
+}
 
 _meshlane_to_medit = {
     cell_type: [order.index(i) for i in range(len(order))]
