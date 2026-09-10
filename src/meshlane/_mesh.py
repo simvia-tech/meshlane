@@ -23,7 +23,9 @@ topological_dimension = {
     "quad9": 2,
     "tetra10": 3,
     "hexahedron27": 3,
+    "wedge15": 3,
     "wedge18": 3,
+    "pyramid13": 3,
     "pyramid14": 3,
     "vertex": 0,
     "quad8": 2,
@@ -269,6 +271,54 @@ class Mesh:
         return np.concatenate(
             [d for c, d in zip(self.cells, self.cell_data[name]) if c.type == cell_type]
         )
+
+    def remove_duplicate_cells(self, dry_run=False):
+        """Remove cells that duplicate another cell of the same type (identical
+        node set, order-independent), keeping the first occurrence. Returns the
+        number removed; with ``dry_run=True`` returns the number that *would* be
+        removed without modifying the mesh.
+
+        ``cell_data`` and ``cell_sets`` are remapped onto the surviving cells.
+        Only fixed-shape ("regular") cell types are considered; ``polyhedron``
+        and ``polygon`` blocks (whose rows are not flat node lists) are left
+        untouched.
+
+        Coincident cells occupy the same space and can cause connectivity errors
+        in downstream solvers (e.g. code_saturne). This is opt-in: meshlane keeps
+        the mesh faithful by default.
+        """
+        seen = set()
+        keeps = []
+        n_removed = 0
+        for cell_block in self.cells:
+            keep = np.ones(len(cell_block.data), dtype=bool)
+            if not cell_block.type.startswith(("polyhedron", "polygon")):
+                for j, row in enumerate(cell_block.data):
+                    key = (cell_block.type, frozenset(int(x) for x in row))
+                    if key in seen:
+                        keep[j] = False
+                    else:
+                        seen.add(key)
+            keeps.append(keep)
+            n_removed += int((~keep).sum())
+        if dry_run or n_removed == 0:
+            return n_removed
+        for cell_block, keep in zip(self.cells, keeps):
+            if not keep.all():
+                cell_block.data = cell_block.data[keep]
+        for name, value_list in self.cell_data.items():
+            self.cell_data[name] = [
+                v if v is None else v[k] for v, k in zip(value_list, keeps)
+            ]
+        for name, member_list in self.cell_sets.items():
+            new_members = []
+            for members, keep in zip(member_list, keeps):
+                new_index = np.cumsum(keep) - 1  # old local index -> new index
+                members = np.asarray(members, dtype=int)
+                members = members[keep[members]]  # drop members that were removed
+                new_members.append(new_index[members])
+            self.cell_sets[name] = new_members
+        return n_removed
 
     @property
     def cells_dict(self):

@@ -34,7 +34,9 @@ def read(filename):
             return _read_ascii(f)
 
         f.read(80)
-        num_triangles = np.fromfile(f, count=1, dtype="<u4")[0]
+        # cast to Python int: numpy 2 (NEP 50) keeps the uint32 dtype, so
+        # num_triangles * 50 overflows and wraps for large files.
+        num_triangles = int(np.fromfile(f, count=1, dtype="<u4")[0])
         # for each triangle, one has 3 float32 (facet normal), 9 float32 (facet),
         # and 1 int16 (attribute count), 50 bytes in total
         if 84 + num_triangles * 50 == filesize_bytes:

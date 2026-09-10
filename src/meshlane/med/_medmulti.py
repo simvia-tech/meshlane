@@ -28,17 +28,19 @@ from .._mesh import Mesh
 from ._med41 import FieldBitmaskWriter
 from ._med import (
     meshio_to_med_type,
+    med_geo_code,
     med_to_geo_type,
     med_to_meshio_type,
     med_type_to_entity,
     numpy_to_med_type,
     numpy_void_str,
     MED_FLOAT64,
-    _med_cells_for_write,
+    _med_str,
     _reorder_med_cells,
-    _warn_unconverted_3d,
     _write_families,
     _read_families,
+    _families_to_point_sets,
+    _families_to_cell_sets,
     _read_data,
     _parse_med_field_name,
     _write_field_step,
@@ -112,7 +114,7 @@ def _bytes_attr(value, fallback=numpy_void_str):
         return fallback
     if isinstance(value, (bytes, np.bytes_)):
         return np.bytes_(value)
-    return np.bytes_(str(value).encode("latin-1"))
+    return np.bytes_(str(value).encode("utf-8"))
 
 
 def _create_field_group(fields, hdf5_name, mesh_name, first_data,
@@ -331,6 +333,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
             med_cells.attrs.create("CGT", 1)
             med_cells.attrs.create("CGS", 1)
             med_cells.attrs.create("PFL", np.bytes_(profile))
+            med_cells.attrs.create("GEO", med_geo_code[med_type])
 
             if cell_type in ("polygon", "polygon2"):
                 all_polygons = sum(cells_list, [])
@@ -345,7 +348,7 @@ def _write_med_multi(filename, meshes, mesh_names=None, med_version="4.1.0", **k
                 n_merged = len(all_polygons)
             else:
                 merged_cells = np.concatenate(cells_list, axis=0)
-                merged_cells = _med_cells_for_write(cell_type, merged_cells)
+                merged_cells = _reorder_med_cells(cell_type, merged_cells)
                 nod = med_cells.create_dataset(
                     "NOD", data=merged_cells.flatten(order="F") + 1
                 )
@@ -432,9 +435,9 @@ def _read_single_mesh(f, name):
     dim = mesh_grp.attrs["ESP"]
 
     # metadata read from the top mesh group (before descending into a step)
-    description = mesh_grp.attrs.get("DES", b"").decode("latin-1").strip().rstrip("\x00")
-    unit_time = mesh_grp.attrs.get("UNT", b"").decode("latin-1").strip().rstrip("\x00")
-    unit_coords = mesh_grp.attrs.get("UNI", b"").decode("latin-1").strip().rstrip("\x00")
+    description = _med_str(mesh_grp.attrs.get("DES", b"")).strip().rstrip("\x00")
+    unit_time = _med_str(mesh_grp.attrs.get("UNT", b"")).strip().rstrip("\x00")
+    unit_coords = _med_str(mesh_grp.attrs.get("UNI", b"")).strip().rstrip("\x00")
 
     if "NOE" not in mesh_grp:
         time_step = list(mesh_grp.keys())
@@ -480,7 +483,6 @@ def _read_single_mesh(f, name):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
-            _warn_unconverted_3d(cell_type)
             data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
             cells += [(cell_type, data)]
 
@@ -516,11 +518,20 @@ def _read_single_mesh(f, name):
                 field_data,
             )
 
+    # Reconstruct point_sets / cell_sets from MED families (same as the
+    # single-mesh reader) so the CLI convert path preserves groups too.
+    point_sets = _families_to_point_sets(point_tags, point_data.get("point_tags"))
+    cell_sets = _families_to_cell_sets(
+        cell_tags, cell_data.get("cell_tags"), len(cells)
+    )
+
     result = Mesh(
         points, cells,
         point_data=point_data,
         cell_data=cell_data,
         field_data=field_data,
+        point_sets=point_sets,
+        cell_sets=cell_sets,
     )
     result.point_tags = point_tags
     result.cell_tags = cell_tags

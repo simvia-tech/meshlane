@@ -6,6 +6,75 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## meshlane 5.5.0 (Aug 24, 2026)
+
+### Added
+- numpy 2.x support: the `numpy<2` upper cap is removed, so meshlane runs on both
+  numpy 1.20+ and numpy 2.x. (#31)
+
+### Changed
+- **Minimum Python is now 3.10** (3.8 and 3.9 dropped). Both are end-of-life, and
+  numpy 2.x requires Python 3.10+. (#31)
+
+### Fixed
+- MED to Abaqus `.inp` via the CLI (`meshlane convert`) now preserves node and
+  element groups (`*NSET`/`*ELSET`) as the multi-mesh read path previously dropped
+  them. Element types are also written canonically (`C3D8`, `S4`, `B31`) instead
+  of non-standard variants (`C3D8RH`, `CAX4P`, `B31H`). (#33, #25, #29)
+- MED: text metadata (group names, units, description) is written as UTF-8, so
+  Salome and code_aster read accented names correctly. (#32)
+- Abaqus: the reader maps thermal and gasket element families, reads
+  assembly-based input files (`*Part`/`*Instance`), and uses less memory on large
+  files. (#30)
+
+## meshlane 5.4.3 (Jul 23, 2026)
+
+### Added
+- CLI: `meshlane convert` handles multi-mesh MED files. Every mesh is read and
+  written out (to MED); converting to a format that cannot hold more than one
+  mesh reports a clear error. (#20)
+
+### Fixed
+- Ansys: the `.inp` reader collapses degenerate elements that ANSYS stores with
+  repeated nodes (tets/wedges/pyramids written as hexes, triangles written as
+  quads) to their real type. This fixes wrong cell types and zero-volume cells that were rejected by
+  solvers. (#22)
+
+## meshlane 5.4.2 (Jul 17, 2026)
+
+### Added
+- MED: read/write support for polyhedra (`MED_POLYHEDRON`) and variable-node
+  polygon (`MED_POLYGON`) writing, so OpenFOAM (snappyHexMesh) polyhedral
+  meshes convert to MED. (#12)
+- CLI: `meshlane info` handles multi-mesh MED files; `meshlane convert` prints
+  read/write progress. (#14)
+- CLI: `meshlane convert --remove-duplicates` removes coincident (duplicate)
+  cells. By default they are kept and a warning is emitted instead. (#17, #18)
+
+### Fixed
+- MED: 3D cells are written with consistent, correct orientation for external MED
+  readers, for both linear and quadratic cells (tetra10, hexahedron20, ...), via
+  the meshlane<->MED node ordering plus a topological pass for warped cells, so
+  `foam -> med` and `inp -> med` meshes are accepted by MED tools (code_saturne, code_aster, etc.). (#9, #13, #16)
+- MED: every cell group is written with its numeric `GEO` attribute, so
+  meshlane's MED files load in readers such as code_aster. (#16)
+- MED: Gmsh physical groups are preserved when writing MED, so a `.msh -> .med`
+  conversion no longer drops its groups. (#11)
+- Ansys: the `.inp` reader handles 1-integer `NBLOCK` and COMPACT `EBLOCK`
+  formats, so real Ansys Workbench exports convert. (#15)
+
+### Changed
+- Abaqus: more robust `.inp` reader (membrane/surface elements, set-of-sets,
+  `*ELSET, GENERATE`, encoding fallback). (#5)
+- OpenFOAM: faster, memory-bounded polyMesh reader (binary + ASCII). (#3)
+- MED: more robust family/group handling (HDF5 creation-order tracking, dynamic
+  family generation). (#4)
+
+### Note
+Because of the MED orientation and `GEO` fixes, a MED file written by this
+version differs from one written by 5.4.1 for 3D meshes (now correctly oriented
+and loadable by external MED tools). MED <-> MED round-trips are unaffected.
+
 ## meshlane 5.4.1
 
 First deploy on pypi.org using github action.

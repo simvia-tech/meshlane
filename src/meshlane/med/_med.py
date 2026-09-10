@@ -7,8 +7,9 @@ import numpy as np
 import re
 
 from ._med41 import FieldBitmaskWriter
+from . import _orient
 
-from .._common import num_nodes_per_cell, warn
+from .._common import num_nodes_per_cell
 from .._exceptions import ReadError, WriteError
 from .._helpers import register_format
 from collections import defaultdict
@@ -47,29 +48,23 @@ med_to_meshio_type = {v: k for k, v in meshio_to_med_type.items()}
 # meshlane convention and MED->MED round-trips are the identity, while meshlane->MED
 # output (e.g. from OpenFOAM/Abaqus) is correctly oriented for MED readers such
 # as Salome and code_saturne.
+#
+# The quadratic entries reuse the linear corner permutation for the corners and
+# carry each edge-midpoint node along with its edge, so corners and midside nodes
+# stay consistent. They were derived and verified against MEDCoupling: after the
+# permutation every cell has positive signed volume and every midside node lies on
+# its edge midpoint per MEDCoupling's edge model.
 _med_node_perm = {
     "tetra": [0, 1, 3, 2],
     "pyramid": [0, 3, 2, 1, 4],
     "wedge": [3, 4, 5, 0, 1, 2],
     "hexahedron": [4, 5, 6, 7, 0, 1, 2, 3],
+    "tetra10": [0, 1, 3, 2, 4, 8, 7, 6, 5, 9],
+    "pyramid13": [0, 3, 2, 1, 4, 8, 7, 6, 5, 9, 12, 11, 10],
+    "wedge15": [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8, 12, 13, 14],
+    "hexahedron20": [4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11,
+                     16, 17, 18, 19],
 }
-
-# Quadratic 3D types have the same meshlane<->MED orientation difference, but their
-# permutations (corners + edge-midpoints) are not implemented yet, so they are
-# left unconverted in both directions (read and write) and may be mis-oriented.
-_med_unconverted_3d = {"tetra10", "hexahedron20", "pyramid13", "wedge15"}
-
-
-def _warn_unconverted_3d(cell_type):
-    """Warn that a quadratic 3D cell type is being read or written without the
-    meshlane <-> MED node-ordering conversion (not implemented for these types
-    yet), so it may be mis-oriented. Called on both read and write."""
-    if cell_type in _med_unconverted_3d:
-        warn(
-            f"MED: orientation conversion for quadratic 3D cells '{cell_type}' is "
-            "not yet implemented. These cells may be mis-oriented for MED tools "
-            "(Salome, code_saturne, code_aster, etc.)."
-        )
 
 
 def _reorder_med_cells(cell_type, data):
@@ -78,13 +73,6 @@ def _reorder_med_cells(cell_type, data):
     both writers (single-mesh and multi-mesh) so the paths cannot drift."""
     perm = _med_node_perm.get(cell_type)
     return data[:, perm] if perm is not None else data
-
-
-def _med_cells_for_write(cell_type, data):
-    """Like :func:`_reorder_med_cells`, for the write paths: additionally warn
-    for unconverted quadratic 3D types."""
-    _warn_unconverted_3d(cell_type)
-    return _reorder_med_cells(cell_type, data)
 
 
 def _med_group_key(cell_type):
@@ -103,6 +91,18 @@ def _med_group_key(cell_type):
 
 
 numpy_void_str = np.bytes_("")
+
+
+def _med_str(raw):
+    # MED stores text as 8-bit char arrays. Decode as UTF-8 (what Salome and
+    # code_aster write and expect), falling back to Latin-1 for older files.
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = bytes((int(x) & 0xFF) for x in np.asarray(raw).ravel())
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
 
 MED_FLOAT32 = 4
 MED_FLOAT64 = 6
@@ -140,6 +140,21 @@ med_type_to_entity = {
     "PE6": "MED_CELL", "P15": "MED_CELL", "PE18": "MED_CELL",
     "POG": "MED_CELL", "POG2": "MED_CELL",
     "POE": "MED_CELL",
+}
+
+# Numeric MED geometry-type codes, written as the "GEO" attribute on every cell
+# group. Some MED tools may reject a cell group without it. Codes follow MED's convention
+# dim*100 + n_nodes (point = 1); polygons/polyhedra use 400/500 (see writer).
+med_geo_code = {
+    "PO1": 1,
+    "SE2": 102, "SE3": 103, "SE4": 104,
+    "TR3": 203, "TR6": 206, "TR7": 207,
+    "QU4": 204, "QU8": 208, "QU9": 209,
+    "TE4": 304, "T10": 310,
+    "HE8": 308, "H20": 320, "H27": 327,
+    "PY5": 305, "P13": 313,
+    "PE6": 306, "P15": 315, "PE18": 318,
+    "POG": 400, "POG2": 420, "POE": 500,
 }
 
 
@@ -368,9 +383,9 @@ def read(filename):
         raise ReadError(f"Must only contain exactly 1 mesh, found {len(meshes)}.")
     mesh_name = list(meshes)[0]
     mesh = mesh_ensemble[mesh_name]
-    mesh_description = mesh.attrs.get("DES", b"").decode("latin-1").strip().rstrip("\x00")
-    mesh_unit_time   = mesh.attrs.get("UNT", b"").decode("latin-1").strip().rstrip("\x00")
-    mesh_unit_coords = mesh.attrs.get("UNI", b"").decode("latin-1").strip().rstrip("\x00")
+    mesh_description = _med_str(mesh.attrs.get("DES", b"")).strip().rstrip("\x00")
+    mesh_unit_time   = _med_str(mesh.attrs.get("UNT", b"")).strip().rstrip("\x00")
+    mesh_unit_coords = _med_str(mesh.attrs.get("UNI", b"")).strip().rstrip("\x00")
 
     dim = mesh.attrs["ESP"]
 
@@ -464,7 +479,6 @@ def read(filename):
             nod = med_cell_type_group["NOD"]
             n_cells = nod.attrs["NBR"]
             data = nod[()].reshape(n_cells, -1, order="F") - 1
-            _warn_unconverted_3d(cell_type)
             data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
             cells += [(cell_type, data)]
 
@@ -690,7 +704,7 @@ def _read_families(fas_data):
         nom_dataset = node_set["GRO"]["NOM"][()]
         name = [None] * n_subsets
         for i in range(n_subsets):
-            name[i] = "".join([chr(x) for x in nom_dataset[i]]).strip().rstrip("\x00")
+            name[i] = _med_str(nom_dataset[i]).strip().rstrip("\x00")
         families[set_id] = name
         group_names[set_id] = group_name
     return families, group_names
@@ -733,13 +747,13 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
     desc = getattr(mesh, "description", None)
     if not desc:
         desc = "Mesh created with meshlane"
-    med_mesh.attrs.create("UNT", np.bytes_(unt.encode("latin-1")) if unt else numpy_void_str)
-    med_mesh.attrs.create("UNI", np.bytes_(uni.encode("latin-1")) if uni else numpy_void_str)
+    med_mesh.attrs.create("UNT", np.bytes_(unt.encode("utf-8")) if unt else numpy_void_str)
+    med_mesh.attrs.create("UNI", np.bytes_(uni.encode("utf-8")) if uni else numpy_void_str)
     med_mesh.attrs.create("SRT", 1)  # sorting type MED_SORT_ITDT
     # component names:
     names = ["X", "Y", "Z"][: mesh.points.shape[1]]
     med_mesh.attrs.create("NOM", np.bytes_("".join(f"{name:<16}" for name in names)))
-    med_mesh.attrs.create("DES", np.bytes_(desc.encode("latin-1")))
+    med_mesh.attrs.create("DES", np.bytes_(desc.encode("utf-8")))
     med_mesh.attrs.create("TYP", 0)  # mesh type (MED_NON_STRUCTURE)
 
     # Time-step
@@ -783,6 +797,47 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         cells_by_type[key].append(cell_block.data)
         if "cell_tags" in mesh.cell_data:
             cell_tags_by_type[key].append(mesh.cell_data["cell_tags"][k])
+    # Prepare final MED-order connectivity per bucket
+    # "regular" cells (fixed node count per type: tetra, pyramid, wedge,
+    # hexahedron, ...) get the meshlane->MED node permutation here. 3D cells
+    # then go through a topological orientation pass (see _orient) so every
+    # internal face is shared by its two cells with opposite winding, which MED
+    # readers (code_saturne, Salome, code_aster,...) require.
+    prepared = {}
+    orient_blocks = []   # 3D cells fed to the orientation pass
+    orient_keys = []     # bucket key per orientation block (to map masks back)
+    for cell_type, cells_list in cells_by_type.items():
+        if cell_type == "polyhedron":
+            all_polys = [poly for arr in cells_list for poly in arr]
+            prepared[cell_type] = ("poly", all_polys)
+            orient_blocks.append({"kind": "polyhedron", "faces": all_polys})
+            orient_keys.append(cell_type)
+        elif cell_type in ("polygon", "polygon2"):
+            all_polygons = [np.asarray(p) for arr in cells_list for p in arr]
+            prepared[cell_type] = ("polygon", all_polygons)
+        else:
+            # "regular" = a fixed-shape cell (tetra/pyramid/hexahedron/...)
+            merged = np.concatenate(cells_list, axis=0)
+            merged = _reorder_med_cells(cell_type, merged)  # meshlane -> MED
+            prepared[cell_type] = ("regular", merged)
+            if cell_type in _orient.ORIENTABLE_TYPES:
+                orient_blocks.append(
+                    {"kind": "regular", "type": cell_type, "conn": merged}
+                )
+                orient_keys.append(cell_type)
+
+    if orient_blocks:
+        masks = _orient.consistent_orientation_flips(orient_blocks, mesh.points)
+        if masks is not None:
+            for key, mask in zip(orient_keys, masks):
+                data_kind, data = prepared[key]
+                if data_kind == "regular":
+                    data = _orient.apply_regular_flip(key, data, mask)
+                else:  # polyhedron
+                    data = _orient.apply_polyhedron_flip(data, mask)
+                prepared[key] = (data_kind, data)
+
+    # Write cells
     cells_group = time_step.create_group("MAI")
     cells_group.attrs.create("CGT", 1)
     for cell_type, cells_list in cells_by_type.items():
@@ -798,14 +853,14 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
         med_cells.attrs.create("CGT", 1)
         med_cells.attrs.create("CGS", 1)
         med_cells.attrs.create("PFL", np.bytes_(profile))
+        med_cells.attrs.create("GEO", med_geo_code[med_type])
+        _, data = prepared[cell_type]
         if cell_type == "polyhedron":
             # MED_POLYHEDRON (POE): three-level, 1-based indexing --
             #   NOD : flat node ids of every face, all polyhedra concatenated
             #   INN : per-face offsets into NOD              (len = n_faces + 1)
             #   IFN : per-polyhedron offsets into the faces  (len = n_poly + 1)
-            # meshlane stores each polyhedron as a list of outward-oriented face
-            # node-arrays, which maps directly onto this.
-            all_polys = [poly for arr in cells_list for poly in arr]
+            all_polys = data
             nod_parts = []
             inn = [1]
             ifn = [1]
@@ -830,15 +885,9 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             ifn_ds = med_cells.create_dataset("IFN", data=ifn)
             ifn_ds.attrs.create("CGT", 1)
             ifn_ds.attrs.create("NBR", len(ifn))
-            med_cells.attrs.create("GEO", 500)  # MED_POLYHEDRON geometry type
             n_merged = len(all_polys)
         elif cell_type in ("polygon", "polygon2"):
-            # cells_list entries may be 2D arrays (polygon<N>, fixed N per block)
-            # or lists of variable-length arrays (generic "polygon"); normalise to
-            # one flat list of node arrays.
-            all_polygons = [
-                np.asarray(poly) for arr in cells_list for poly in arr
-            ]
+            all_polygons = data
             all_nodes = np.concatenate([c + 1 for c in all_polygons])
             lengths = [len(c) for c in all_polygons]
             inn = np.concatenate([[1], np.cumsum(lengths) + 1]).astype(int)
@@ -849,12 +898,9 @@ def write(filename, mesh, med_version="4.1.0", **kwargs):
             inn_ds = med_cells.create_dataset("INN", data=inn)
             inn_ds.attrs.create("CGT", 1)
             inn_ds.attrs.create("NBR", len(inn))
-            med_cells.attrs.create("GEO", 400)  # MED_POLYGON geometry type
             n_merged = len(all_polygons)
         else:
-            # Merge cells of the same type
-            merged_cells = np.concatenate(cells_list, axis=0)
-            merged_cells = _med_cells_for_write(cell_type, merged_cells)
+            merged_cells = data
             nod = med_cells.create_dataset(
                 "NOD", data=merged_cells.flatten(order="F") + 1
             )
@@ -1156,7 +1202,7 @@ def _write_families(fm_group, tags, group_names=None):
         # <= MED_NAME_SIZE (64) octets. Les libellés lisibles sont
         # stockés dans GRO/NOM, pas ici.
         gname = gname.replace("/", "_")
-        if len(gname.encode("latin-1", "replace")) > 64:
+        if len(gname.encode("utf-8", "replace")) > 64:
             gname = f"FAM_{set_id}"
         family = fm_group.create_group(gname, track_order=True)
         family.attrs.create("NUM", set_id)
@@ -1172,7 +1218,7 @@ def _write_families(fm_group, tags, group_names=None):
         )
         buf = np.full((len(name), 80), ord(" "), dtype="i1")
         for i, n in enumerate(name):
-            name_bytes = n.encode("latin-1", "replace")
+            name_bytes = n.encode("utf-8", "replace")
             if len(name_bytes) > 80:
                 raise WriteError(
                     f"Family name '{n}' is too long for MED format (max 80 bytes)."

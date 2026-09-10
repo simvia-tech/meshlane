@@ -1142,13 +1142,14 @@ def test_step_metadata_roundtrip(tmp_path):
             )
 
 
-def test_metadata_latin1_roundtrip(tmp_path):
-    """Non-ASCII Latin-1 metadata (µm, °C, French accents) must round-trip.
-    MED stores strings as 8-bit char arrays, so Latin-1 is the supported
-    encoding. Plain ASCII and Latin-1 supplements must both be preserved
-    without UnicodeEncodeError on write.
+def test_metadata_utf8_roundtrip(tmp_path):
+    """Non-ASCII metadata (µm, French accents) must round-trip and be stored as
+    UTF-8, so external readers (like Salome 9, code_aster, etc.) accept it. Latin-1
+    bytes (e.g. é = 0xE9) crash some solvers UTF-8 decoding.
     """
-    filename = tmp_path / "latin1.med"
+    import h5py
+
+    filename = tmp_path / "utf8.med"
     mesh = copy.deepcopy(helpers.tri_mesh)
     mesh.unit_coords = "µm"
     mesh.unit_time = "µs"
@@ -1160,6 +1161,13 @@ def test_metadata_latin1_roundtrip(tmp_path):
     assert out.unit_coords == "µm"
     assert out.unit_time == "µs"
     assert out.description == "Maillage généré par Salome"
+
+    # stored as UTF-8 (é -> 0xC3 0xA9)
+    with h5py.File(filename, "r") as f:
+        name = list(f["ENS_MAA"].keys())[0]
+        des = bytes(f["ENS_MAA"][name].attrs["DES"])
+    assert b"\xc3\xa9" in des
+    assert des.decode("utf-8").startswith("Maillage")
 
 
 def test_med_multi_write_read_two_meshes(tmp_path):
@@ -1201,6 +1209,30 @@ def test_med_multi_write_read_two_meshes(tmp_path):
     assert len(meshes[1].cells[0].data) == 2, (
         "mesh_b must have 2 triangles"
     )
+
+
+def test_med_multi_preserves_groups(tmp_path):
+    """
+    read_med_multi must reconstruct point_sets/cell_sets from MED families,
+    like the single-mesh reader. Regression: the CLI convert path uses
+    read_med_multi, and previously dropped all groups (issues #25/#29).
+    """
+    from meshlane._mesh import Mesh, CellBlock
+
+    mesh = Mesh(
+        np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]),
+        [CellBlock("triangle", np.array([[0, 1, 2], [1, 3, 2]]))],
+        point_sets={"corner": np.array([0])},
+        cell_sets={"right": [np.array([0])], "left": [np.array([1])]},
+    )
+    filename = tmp_path / "grp.med"
+    meshlane.med.write(filename, mesh)
+
+    meshes, _ = meshlane.med.read_med_multi(filename)
+    out = meshes[0]
+
+    assert set(out.point_sets) == {"corner"}
+    assert set(out.cell_sets) == {"right", "left"}
 
 
 def test_med_multi_default_mesh_names(tmp_path):
@@ -1682,3 +1714,105 @@ def test_polygonN_fixed_block_written_to_med(tmp_path):
     assert len(back.cells) == 1
     assert back.cells[0].type.startswith("polygon")
     np.testing.assert_array_equal(np.asarray(back.cells[0].data[0]), [0, 1, 2, 3, 4])
+
+
+# --- topological 3D-cell orientation for MED (code_saturne consistency) -----
+
+# two hexes sharing the plane x=1, both valid VTK order
+_TWOHEX_PTS = np.array(
+    [[0, 0, 0], [1, 0, 0], [2, 0, 0],
+     [0, 1, 0], [1, 1, 0], [2, 1, 0],
+     [0, 0, 1], [1, 0, 1], [2, 0, 1],
+     [0, 1, 1], [1, 1, 1], [2, 1, 1]], float,
+)
+_TWOHEX = np.array([[0, 1, 4, 3, 6, 7, 10, 9],
+                    [1, 2, 5, 4, 7, 8, 11, 10]])
+_HEX_FLIP = [0, 3, 2, 1, 4, 7, 6, 5]
+
+
+def test_orient_flips_inconsistent_cell():
+    """The orientation pass flips nothing on a consistent mesh, and flips
+    exactly one cell to repair a deliberately inverted neighbour."""
+    from meshlane.med import _orient
+
+    consistent = [{"kind": "regular", "type": "hexahedron",
+                   "conn": _TWOHEX.copy()}]
+    assert _orient.consistent_orientation_flips(consistent, _TWOHEX_PTS) is None
+
+    bad = _TWOHEX.copy()
+    bad[1] = bad[1][_HEX_FLIP]  # invert one hex -> inconsistent shared face
+    masks = _orient.consistent_orientation_flips(
+        [{"kind": "regular", "type": "hexahedron", "conn": bad}], _TWOHEX_PTS
+    )
+    assert masks is not None
+    assert int(masks[0].sum()) == 1
+
+
+def test_med_writer_produces_consistent_orientation(tmp_path):
+    """A mesh with an inverted 3D cell is written to MED with globally
+    consistent face orientation (every internal face shared with opposite
+    winding), so MED readers like code_saturne accept it."""
+    from meshlane._mesh import Mesh, CellBlock
+    from meshlane.med import _orient
+
+    conn = _TWOHEX.copy()
+    conn[1] = conn[1][_HEX_FLIP]  # inconsistent input
+    mesh = Mesh(_TWOHEX_PTS, [CellBlock("hexahedron", conn)])
+
+    filename = tmp_path / "orient.med"
+    meshlane.write(filename, mesh)
+
+    # read the on-disk MED-order hexes and assert they are now consistent
+    with h5py.File(filename, "r") as f:
+        m = f["ENS_MAA"]["mesh"]
+        if "NOE" not in m:
+            m = m[list(m.keys())[0]]
+        he8 = m["MAI"]["HE8"]["NOD"]
+        nbr = he8.attrs["NBR"]
+        dconn = he8[()].reshape(nbr, -1, order="F") - 1
+    blocks = [{"kind": "regular", "type": "hexahedron", "conn": dconn}]
+    # already consistent on disk -> the pass finds nothing to fix
+    assert _orient.consistent_orientation_flips(blocks, _TWOHEX_PTS) is None
+
+
+def test_med_geo_attribute(tmp_path):
+    """Every cell group must carry the numeric MED GEO attribute; code_aster's
+    MED reader rejects a group without it."""
+    import h5py
+
+    from meshlane.med._med import med_geo_code
+
+    p = tmp_path / "geo.med"
+    meshlane.med.write(p, helpers.tet10_mesh)
+    geos = {}
+    with h5py.File(p, "r") as f:
+        def walk(g):
+            for k in g:
+                it = g[k]
+                if hasattr(it, "attrs") and "GEO" in it.attrs:
+                    geos[k] = int(it.attrs["GEO"])
+                if hasattr(it, "keys"):
+                    walk(it)
+        walk(f)
+    assert geos.get("T10") == med_geo_code["T10"] == 310
+
+
+def test_med_node_perm_self_inverse():
+    """meshlane<->MED node permutations must be valid, self-inverse permutations."""
+    from meshlane.med._med import _med_node_perm
+
+    for t, perm in _med_node_perm.items():
+        assert sorted(perm) == list(range(len(perm))), t
+        assert all(perm[perm[i]] == i for i in range(len(perm))), t
+
+
+def test_orient_flip_perm_self_inverse():
+    """Orientation-reversing flip perms must be valid, self-inverse; quadratic 3D
+    types must be handled by the topological orientation pass."""
+    from meshlane.med import _orient
+
+    for t, perm in _orient._FLIP_PERM.items():
+        assert sorted(perm) == list(range(len(perm))), t
+        assert all(perm[perm[i]] == i for i in range(len(perm))), t
+    for t in ("tetra10", "hexahedron20", "wedge15", "pyramid13"):
+        assert t in _orient.ORIENTABLE_TYPES

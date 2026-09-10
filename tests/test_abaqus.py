@@ -76,3 +76,114 @@ def test_elset(tmp_path):
     for k, v in mesh_ref.cell_sets.items():
         for ic in range(len(mesh_ref.cells)):
             assert np.allclose(v[ic], mesh.cell_sets[k][ic])
+
+
+def _nodes(n):
+    return "*NODE\n" + "".join(
+        f"{i}, {float(i)}, {float(i % 3)}, {float(i % 2)}\n" for i in range(1, n + 1)
+    )
+
+
+def _write_deck(path, n_nodes, body):
+    path.write_text(_nodes(n_nodes) + body)
+    return path
+
+
+def test_thermal_and_gasket_types(tmp_path):
+    # thermal (DC3D*) and gasket (GK3D8) map to their geometry
+    body = (
+        "*ELEMENT, TYPE=DC3D10, ELSET=T\n1, 1,2,3,4,5,6,7,8,9,10\n"
+        "*ELEMENT, TYPE=DC3D8, ELSET=H\n2, 1,2,3,4,5,6,7,8\n"
+        "*ELEMENT, TYPE=GK3D8, ELSET=G\n3, 1,2,3,4,5,6,7,8\n"
+    )
+    f = _write_deck(tmp_path / "t.inp", 10, body)
+    mesh = meshlane.abaqus.read(f)
+    counts = {}
+    for c in mesh.cells:
+        counts[c.type] = counts.get(c.type, 0) + len(c.data)
+    assert counts == {"tetra10": 1, "hexahedron": 2}
+
+
+def test_skip_non_mesh_elements(tmp_path):
+    # connectors/springs/masses are not cells and must be dropped (no error)
+    body = (
+        "*ELEMENT, TYPE=C3D4, ELSET=S\n1, 1,2,3,4\n"
+        "*ELEMENT, TYPE=SPRING2, ELSET=SP\n2, 1,2\n"
+        "*ELEMENT, TYPE=MASS, ELSET=M\n3, 1\n"
+        "*ELEMENT, TYPE=CONN3D2, ELSET=C\n4, 1,2\n"
+        "*ELEMENT, TYPE=DCOUP3D, ELSET=D\n5, 1\n"
+    )
+    f = _write_deck(tmp_path / "s.inp", 4, body)
+    mesh = meshlane.abaqus.read(f)
+    assert {c.type for c in mesh.cells} == {"tetra"}
+
+
+def test_write_canonical_element_types(tmp_path):
+    # the writer must emit the plain canonical Abaqus types, not the R/H variants
+    # a naive reverse map produces (hexahedron->C3D8RH, quad->CAX4P, line->B31H).
+    points = np.zeros((8, 3))
+    cells = [
+        ("hexahedron", np.arange(8).reshape(1, 8)),
+        ("quad", np.arange(4).reshape(1, 4)),
+        ("line", np.arange(2).reshape(1, 2)),
+    ]
+    mesh = meshlane.Mesh(points, cells)
+    f = tmp_path / "canon.inp"
+    meshlane.abaqus.write(f, mesh)
+    types = {
+        line.split("TYPE=")[1].strip()
+        for line in f.read_text().splitlines()
+        if line.startswith("*ELEMENT")
+    }
+    assert types == {"C3D8", "S4", "B31"}
+
+
+def test_unknown_type_warns_and_skips(tmp_path, capsys):
+    # an unrecognized type is skipped with a warning, the rest still reads
+    body = (
+        "*ELEMENT, TYPE=C3D4, ELSET=S\n1, 1,2,3,4\n"
+        "*ELEMENT, TYPE=FOOBAR9, ELSET=X\n2, 1,2,3,4\n"
+    )
+    f = _write_deck(tmp_path / "u.inp", 4, body)
+    mesh = meshlane.abaqus.read(f)
+    assert {c.type for c in mesh.cells} == {"tetra"}
+    assert "FOOBAR9" in capsys.readouterr().err
+
+
+def test_assembly_instances(tmp_path):
+    # a part instanced three times: identity, translated, and rotated. Each
+    # instance keeps its own node numbering, so the copies must not collide.
+    deck = """*Part, name=P1
+*Node
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*Element, type=C3D4
+1, 1, 2, 3, 4
+*Nset, nset=CORNER
+1,
+*End Part
+*Assembly, name=Assembly
+*Instance, name=I1, part=P1
+*End Instance
+*Instance, name=I2, part=P1
+10.0, 0.0, 0.0
+*End Instance
+*Instance, name=I3, part=P1
+0.0, 0.0, 0.0
+0.0,0.0,0.0, 0.0,0.0,1.0, 90.0
+*End Instance
+*Nset, nset=TOP, instance=I2
+2
+*End Assembly
+"""
+    f = tmp_path / "asm.inp"
+    f.write_text(deck)
+    m = meshlane.read(f)
+    assert len(m.points) == 12                       # 3 instances x 4 nodes
+    assert sum(len(c.data) for c in m.cells) == 3    # 3 tetra
+    assert np.allclose(m.points[4], [10.0, 0.0, 0.0])            # I2 translated
+    assert np.allclose(m.points[9], [0.0, 1.0, 0.0], atol=1e-9)  # I3 (1,0,0)->(0,1,0)
+    assert len(m.point_sets["CORNER"]) == 3          # part set, unioned over 3
+    assert np.allclose(m.points[m.point_sets["TOP"][0]], [11.0, 0.0, 0.0])
