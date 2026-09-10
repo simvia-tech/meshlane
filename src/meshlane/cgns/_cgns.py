@@ -281,9 +281,15 @@ def read(filename):
       CGNS node is an HDF5 group and its payload lives in a ``" data"`` dataset.
     - Only ``Unstructured`` zones are read; structured zones are rejected.
     - Exactly one base and one zone are read: the first ``CGNSBase_t`` node and,
-      within it, the first ``Zone_t`` node. Additional bases or zones are
-      ignored.
-      - BC_t and Family_t are ignored in that first iteration.
+      within it, the first ``Zone_t`` node. **Additional bases and zones are
+      silently ignored**, so a multi-zone file loses every zone but the first
+      (e.g. the CGNS ``HeatingCoil`` example keeps ``FluidZone`` and drops
+      ``SolidZone``). Split such files per zone before reading.
+    - ``MIXED`` sections are read but not written: on write, elements are
+      re-emitted as homogeneous ``Elements_t`` sections, one per element type.
+    - ``ZoneBC_t``, ``Family_t``, ``FlowSolution_t`` and all other solution and
+      metadata nodes are neither read nor written; base and zone names are not
+      preserved.
     """
     import h5py
 
