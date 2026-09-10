@@ -1,7 +1,9 @@
+import h5py
 import numpy as np
 import pytest
 
 import meshlane
+from meshlane.cgns import _cgns
 
 from . import helpers
 
@@ -96,3 +98,63 @@ def test_polyhedron_face_orientation_roundtrip(tmp_path):
                 f"cell {label}: face winding not preserved: "
                 f"{list(g_face)} != {list(e_face)}"
             )
+
+
+def _write_mixed_file(path, points, conn, n_elem, offsets=None):
+    """Hand-build a CGNS/HDF5 file with a single MIXED (type 20) section."""
+    pts = np.asarray(points, dtype=np.float64)
+    with h5py.File(path, "w") as f:
+        _cgns._init_root(f)
+        base = _cgns._create_node(f, "Base", "CGNSBase_t", "I4", [3, 3])
+        zone = _cgns._create_node(
+            base, "Zone", "Zone_t", "I4", [[len(pts)], [n_elem], [0]]
+        )
+        _cgns._write_string_node(zone, "ZoneType", "ZoneType_t", "Unstructured")
+        grid = _cgns._create_node(zone, "GridCoordinates", "GridCoordinates_t")
+        for i, nm in enumerate(["CoordinateX", "CoordinateY", "CoordinateZ"]):
+            _cgns._create_node(
+                grid, nm, "DataArray_t", "R8", np.ascontiguousarray(pts[:, i])
+            )
+        sec = _cgns._create_node(zone, "Mixed", "Elements_t", "I4", [20, 0])
+        _cgns._create_node(sec, "ElementRange", "IndexRange_t", "I8", [1, n_elem])
+        _cgns._create_node(sec, "ElementConnectivity", "DataArray_t", "I8", conn)
+        if offsets is not None:
+            _cgns._create_node(sec, "ElementStartOffset", "DataArray_t", "I8", offsets)
+
+
+MIXED_POINTS = [
+    [0.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+]
+# TETRA_4 (code 10) over nodes 1-4, then TRI_3 (code 5) over nodes 1-3. 1-based.
+MIXED_CONN = [10, 1, 2, 3, 4, 5, 1, 2, 3]
+
+
+@pytest.mark.parametrize("offsets", [None, [0, 5, 9]])
+def test_read_mixed_section(tmp_path, offsets):
+    """MIXED sections must split into one block per element type, with and
+    without ElementStartOffset (real CGNS example files omit it)."""
+    p = tmp_path / "mixed.cgns"
+    _write_mixed_file(p, MIXED_POINTS, MIXED_CONN, 2, offsets)
+
+    mesh = meshlane.cgns.read(p)
+
+    got = {cb.type: np.asarray(cb.data).tolist() for cb in mesh.cells}
+    assert got == {"tetra": [[0, 1, 2, 3]], "triangle": [[0, 1, 2]]}
+    assert mesh.points.shape == (4, 3)
+
+
+def test_mixed_roundtrips_as_homogeneous_sections(tmp_path):
+    """MIXED is read-only: the writer re-emits homogeneous Elements_t sections,
+    which must preserve every element."""
+    p = tmp_path / "mixed.cgns"
+    _write_mixed_file(p, MIXED_POINTS, MIXED_CONN, 2, None)
+
+    mesh = meshlane.cgns.read(p)
+    q = tmp_path / "out.cgns"
+    meshlane.cgns.write(q, mesh)
+    back = meshlane.cgns.read(q)
+
+    assert {cb.type: len(cb.data) for cb in back.cells} == {"tetra": 1, "triangle": 1}

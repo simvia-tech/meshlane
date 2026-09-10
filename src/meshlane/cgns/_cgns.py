@@ -53,6 +53,7 @@ _cgns_to_meshio_type = {
 
 NGON_N = 22
 NFACE_N = 23
+MIXED = 20
 
 # Inverse of ``_cgns_to_meshio_type`` for the writer, restricted to the
 # fixed-size element types. The two variable-length "poly" types (NGON_n/
@@ -155,6 +156,55 @@ def _resolve_polyhedra(cell_offsets, cell_faces, faces_by_number):
     return list(blocks.items())
 
 
+def _read_mixed_section(section, name):
+    """Split a ``MIXED`` (element type 20) section into per-type cell blocks.
+
+    MIXED connectivity is a flat stream in which every element is prefixed by
+    its own CGNS element type code: ``[type, n0..nk, type, n0..nk, ...]``.
+    CGNS 4.0 files also carry ``ElementStartOffset`` (CPEX0031); older ones do
+    not, so the stream is walked sequentially using each type's node count.
+
+    Returns ``(meshio_type, ndarray)`` blocks in first-seen order, or ``[]`` if
+    the section holds an element type whose node count is unknown (in which case
+    the stream cannot be walked past it and the whole section is skipped).
+    """
+    conn = _index_array(section["ElementConnectivity"])
+
+    if "ElementStartOffset" in section:
+        starts = [int(o) for o in _index_array(section["ElementStartOffset"])[:-1]]
+    else:
+        starts = []
+        i = 0
+        while i < conn.size:
+            info = _cgns_to_meshio_type.get(int(conn[i]))
+            if info is None or info[1] is None:
+                warn(
+                    f"CGNS: unsupported element type {int(conn[i])} inside MIXED "
+                    f'section "{name}"; section skipped.'
+                )
+                return []
+            starts.append(i)
+            i += 1 + info[1]
+
+    groups = {}
+    for start in starts:
+        code = int(conn[start])
+        info = _cgns_to_meshio_type.get(code)
+        if info is None or info[1] is None:
+            warn(
+                f"CGNS: unsupported element type {code} inside MIXED "
+                f'section "{name}"; section skipped.'
+            )
+            return []
+        meshio_type, nodes_per_cell = info
+        # CGNS indices are 1-based; meshlane connectivity is 0-based.
+        groups.setdefault(meshio_type, []).append(
+            conn[start + 1 : start + 1 + nodes_per_cell] - 1
+        )
+
+    return [(t, np.array(v, dtype=np.int64)) for t, v in groups.items()]
+
+
 def _read_elements(zone):
     cells = []
 
@@ -168,6 +218,11 @@ def _read_elements(zone):
 
     for section in _children_with_label(zone, "Elements_t"):
         code = int(_node_data(section).ravel()[0])
+
+        if code == MIXED:
+            cells.extend(_read_mixed_section(section, section.name))
+            continue
+
         info = _cgns_to_meshio_type.get(code)
         if info is None:
             warn(
