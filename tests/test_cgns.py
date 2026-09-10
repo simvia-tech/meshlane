@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 import meshlane
@@ -61,3 +62,37 @@ def test_polyhedron_faces_not_duplicated_on_roundtrip(tmp_path):
     )
     assert n_polygons == 4, f"expected 4 polygons, got {n_polygons} (faces duplicated)"
     assert n_polyhedra == 1, f"expected 1 polyhedron, got {n_polyhedra}"
+
+
+def test_polyhedron_face_orientation_roundtrip(tmp_path):
+    """A face shared by two polyhedra must come back with opposite winding in
+    the two cells. CGNS encodes that as the sign of the NFACE_n reference; the
+    reader must honour it rather than returning both cells the canonical order.
+    Regression for F2 (21% of face references flipped on particles_example)."""
+    points = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+    ]
+    # Two tetrahedra sharing face (0, 1, 2), listed in opposite windings.
+    cell_a = [[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]]
+    cell_b = [[2, 1, 0], [0, 1, 4], [1, 2, 4], [0, 2, 4]]
+    mesh = meshlane.Mesh(points, [("polyhedron4", [cell_a, cell_b])])
+
+    p = tmp_path / "orient.cgns"
+    meshlane.cgns.write(p, mesh)
+    back = meshlane.cgns.read(p)
+
+    blocks = [cb for cb in back.cells if cb.type.startswith("polyhedron")]
+    assert len(blocks) == 1
+    got_a, got_b = blocks[0].data
+
+    for expected, got, label in ((cell_a, got_a, "A"), (cell_b, got_b, "B")):
+        assert len(got) == len(expected), f"cell {label}: face count changed"
+        for e_face, g_face in zip(expected, got):
+            assert list(g_face) == list(e_face), (
+                f"cell {label}: face winding not preserved: "
+                f"{list(g_face)} != {list(e_face)}"
+            )

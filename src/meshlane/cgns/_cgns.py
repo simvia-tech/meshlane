@@ -129,22 +129,27 @@ def _read_coordinates(zone, phys_dim):
 def _resolve_polyhedra(cell_offsets, cell_faces, faces_by_number):
     """Build polyhedron cell blocks from NFACE_n cells and NGON_n faces.
 
-    Each NFACE_n cell lists signed face references; the sign encodes face
-    orientation and is dropped, and the magnitude is the face's global CGNS
-    element number. ``faces_by_number`` maps that global number to the face's
-    0-based node-index array, collected from every NGON_n section, so faces
-    referenced across more than one NGON_n section all resolve. The result
-    follows meshio's polyhedron layout: a list (per cell) of lists (per face) of
-    0-based node-index arrays, grouped into ``polyhedron{n}`` blocks by the
-    cell's unique node count (as in the vtu reader).
+    Each NFACE_n cell lists signed face references. The magnitude is the face's
+    global CGNS element number; ``faces_by_number`` maps that number to the
+    face's 0-based node-index array, collected from every NGON_n section, so
+    faces referenced across more than one NGON_n section all resolve. The sign
+    is the face's orientation relative to the stored (canonical) node order:
+    negative means the cell traverses the face the other way round, so the node
+    order is reversed for that cell. A copy is taken because the canonical array
+    is shared with the ``polygon`` block and with the face's other owner.
+
+    The result follows meshio's polyhedron layout: a list (per cell) of lists
+    (per face) of 0-based node-index arrays, grouped into ``polyhedron{n}``
+    blocks by the cell's unique node count (as in the vtu reader).
     """
     blocks = {}
     n_cells = len(cell_offsets) - 1
     for i in range(n_cells):
-        faces = [
-            faces_by_number[abs(int(face_ref))]
-            for face_ref in cell_faces[cell_offsets[i] : cell_offsets[i + 1]]
-        ]
+        faces = []
+        for face_ref in cell_faces[cell_offsets[i] : cell_offsets[i + 1]]:
+            ref = int(face_ref)
+            nodes = faces_by_number[abs(ref)]
+            faces.append(nodes[::-1].copy() if ref < 0 else nodes)
         n_unique = np.unique(np.concatenate(faces)).size
         blocks.setdefault(f"polyhedron{n_unique}", []).append(faces)
     return list(blocks.items())
