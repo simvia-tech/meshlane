@@ -207,6 +207,7 @@ def _read_mixed_section(section, name):
 
 def _read_elements(zone):
     cells = []
+    n_sections = 0
 
     # NGON_n faces must be read before NFACE_n cells can be resolved. Collect
     # every NGON_n face keyed by its global CGNS element number so NFACE_n cells
@@ -218,6 +219,7 @@ def _read_elements(zone):
 
     for section in _children_with_label(zone, "Elements_t"):
         code = int(_node_data(section).ravel()[0])
+        n_sections += 1
 
         if code == MIXED:
             cells.extend(_read_mixed_section(section, section.name))
@@ -260,6 +262,13 @@ def _read_elements(zone):
                 "CGNS: NFACE_n section found without an NGON_n section to resolve it."
             )
         cells.extend(_resolve_polyhedra(nface_offsets, nface_conn, faces_by_number))
+
+    if n_sections and not cells:
+        raise ReadError(
+            f"CGNS: none of the {n_sections} element section(s) in "
+            f'"{zone.name}" could be read; the mesh would have no cells. '
+            "See the warnings above for the unsupported element types."
+        )
 
     return cells
 

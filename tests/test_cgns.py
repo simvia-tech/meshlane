@@ -158,3 +158,36 @@ def test_mixed_roundtrips_as_homogeneous_sections(tmp_path):
     back = meshlane.cgns.read(q)
 
     assert {cb.type: len(cb.data) for cb in back.cells} == {"tetra": 1, "triangle": 1}
+
+
+def test_all_sections_unsupported_raises(tmp_path):
+    """A file whose every element section is unreadable must raise, not
+    silently degrade to a point cloud. Regression for F1."""
+    p = tmp_path / "unsupported.cgns"
+    # Element type 99 does not exist in the SIDS enumeration.
+    _write_mixed_file(p, MIXED_POINTS, [1, 2, 3], 1, None)
+    with h5py.File(p, "r+") as f:
+        f["Base"]["Zone"]["Mixed"][" data"][...] = np.array([99, 0], dtype=np.int32)
+
+    with pytest.raises(meshlane.ReadError, match="element section"):
+        meshlane.cgns.read(p)
+
+
+def test_point_cloud_without_element_sections_reads(tmp_path):
+    """A zone with no Elements_t sections at all is a valid point cloud."""
+    pts = np.asarray(MIXED_POINTS, dtype=np.float64)
+    p = tmp_path / "points.cgns"
+    with h5py.File(p, "w") as f:
+        _cgns._init_root(f)
+        base = _cgns._create_node(f, "Base", "CGNSBase_t", "I4", [3, 3])
+        zone = _cgns._create_node(base, "Zone", "Zone_t", "I4", [[len(pts)], [0], [0]])
+        _cgns._write_string_node(zone, "ZoneType", "ZoneType_t", "Unstructured")
+        grid = _cgns._create_node(zone, "GridCoordinates", "GridCoordinates_t")
+        for i, nm in enumerate(["CoordinateX", "CoordinateY", "CoordinateZ"]):
+            _cgns._create_node(
+                grid, nm, "DataArray_t", "R8", np.ascontiguousarray(pts[:, i])
+            )
+
+    mesh = meshlane.cgns.read(p)
+    assert mesh.points.shape == (4, 3)
+    assert mesh.cells == []
