@@ -1167,3 +1167,21 @@ class TestRobustness:
         # Only the one valid face should be included
         total = sum(len(cb.data) for cb in cells)
         assert total == 1
+
+
+def test_read_binary_face_compact_list(tmp_path):
+    """Binary faces as OpenFOAM writes them: offsets, then all node ids."""
+    header = BINARY_HEADER.format(lab=32, sca=64, cls="faceCompactList", obj="faces")
+    offsets = np.array([0, 4, 7], dtype="<i4")
+    nodes = np.array([0, 1, 2, 3, 4, 5, 6], dtype="<i4")
+    raw = (
+        header.encode()
+        + b"3\n("
+        + offsets.tobytes()
+        + b")\n7\n("
+        + nodes.tobytes()
+        + b")\n"
+    )
+    path = tmp_path / "faces"
+    path.write_bytes(raw)
+    assert _read_faces(path).to_lists() == [[0, 1, 2, 3], [4, 5, 6]]
