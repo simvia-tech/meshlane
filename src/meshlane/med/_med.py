@@ -371,6 +371,71 @@ def _ensure_med_families(mesh):
     return out
 
 
+def _read_cells(med_cells):
+    """Read the cell blocks of a MED mesh group (``MAI``).
+
+    Returns ``(cells, cell_types, cell_tags)``. ``cell_tags`` holds one family
+    array per block, with family 0 (the MED default) for blocks without ``FAM``,
+    or is ``None`` when no block has families.
+    """
+    cells = []
+    cell_types = []
+    tags = []
+    for med_cell_type, med_cell_type_group in med_cells.items():
+        fam = med_cell_type_group["FAM"][()] if "FAM" in med_cell_type_group else None
+        if med_cell_type == "POE":  # MED_POLYHEDRON: variable faces and nodes
+            nod = med_cell_type_group["NOD"][()] - 1  # flat node ids of every face
+            inn = med_cell_type_group["INN"][()]  # per-face index into NOD
+            ifn = med_cell_type_group["IFN"][()]  # per-polyhedron index into faces
+            n_poly = len(ifn) - 1
+            polys = []
+            for p in range(n_poly):
+                faces = [
+                    nod[inn[fidx] - 1 : inn[fidx + 1] - 1]
+                    for fidx in range(ifn[p] - 1, ifn[p + 1] - 1)
+                ]
+                polys.append(faces)
+            # Group by unique node count into polyhedron<N> blocks, matching the
+            # meshlane convention (see openfoam._build_polyhedra).
+            by_n = defaultdict(list)
+            for i, poly in enumerate(polys):
+                n_nodes = len(set().union(*poly)) if poly else 0
+                by_n[n_nodes].append(i)
+            for n_nodes, idxs in by_n.items():
+                block = np.empty(len(idxs), dtype=object)
+                for j, i in enumerate(idxs):
+                    block[j] = [np.asarray(f, dtype=int) for f in polys[i]]
+                cells.append((f"polyhedron{n_nodes}", block))
+                cell_types.append(f"polyhedron{n_nodes}")
+                tags.append(None if fam is None else fam[np.array(idxs)])
+            continue
+        cell_type = med_to_meshio_type[med_cell_type]
+        cell_types.append(cell_type)
+        if med_cell_type in ("POG", "POG2"):  # polygonal cells with variable node count
+            nod = med_cell_type_group["NOD"][()] - 1
+            inn = med_cell_type_group["INN"][()]
+            polygons = [
+                nod[inn[i] - 1 : inn[i + 1] - 1] for i in range(len(inn) - 1)
+            ]
+            cells.append((cell_type, polygons))
+        else:
+            nod = med_cell_type_group["NOD"]
+            n_cells = nod.attrs["NBR"]
+            data = nod[()].reshape(n_cells, -1, order="F") - 1
+            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
+            cells += [(cell_type, data)]
+        tags.append(fam)
+
+    if all(t is None for t in tags):
+        return cells, cell_types, None
+    # keep cell_tags aligned with the blocks: family 0 where FAM is absent
+    cell_tags = [
+        t if t is not None else np.zeros(len(c[1]), dtype=np.int32)
+        for t, c in zip(tags, cells)
+    ]
+    return cells, cell_types, cell_tags
+
+
 def read(filename):
     import h5py
 
@@ -428,66 +493,9 @@ def read(filename):
         point_tags, point_tag_groups = _read_families(fas["NOEUD"])
 
     # CellBlock
-    cells = []
-    cell_types = []
-    med_cells = mesh["MAI"]
-    for med_cell_type, med_cell_type_group in med_cells.items():
-        if med_cell_type == "POE":  # MED_POLYHEDRON: variable faces and nodes
-            nod = med_cell_type_group["NOD"][()] - 1  # flat node ids of every face
-            inn = med_cell_type_group["INN"][()]  # per-face index into NOD
-            ifn = med_cell_type_group["IFN"][()]  # per-polyhedron index into faces
-            fam = (
-                med_cell_type_group["FAM"][()]
-                if "FAM" in med_cell_type_group
-                else None
-            )
-            n_poly = len(ifn) - 1
-            polys = []
-            for p in range(n_poly):
-                faces = [
-                    nod[inn[fidx] - 1 : inn[fidx + 1] - 1]
-                    for fidx in range(ifn[p] - 1, ifn[p + 1] - 1)
-                ]
-                polys.append(faces)
-            # Group by unique node count into polyhedron<N> blocks, matching the
-            # meshlane convention (see openfoam._build_polyhedra).
-            by_n = defaultdict(list)
-            for i, poly in enumerate(polys):
-                n_nodes = len(set().union(*poly)) if poly else 0
-                by_n[n_nodes].append(i)
-            for n_nodes, idxs in by_n.items():
-                block = np.empty(len(idxs), dtype=object)
-                for j, i in enumerate(idxs):
-                    block[j] = [np.asarray(f, dtype=int) for f in polys[i]]
-                cells.append((f"polyhedron{n_nodes}", block))
-                cell_types.append(f"polyhedron{n_nodes}")
-                if fam is not None:
-                    if "cell_tags" not in cell_data:
-                        cell_data["cell_tags"] = []
-                    cell_data["cell_tags"].append(fam[np.array(idxs)])
-            continue
-        cell_type = med_to_meshio_type[med_cell_type]
-        cell_types.append(cell_type)
-        if med_cell_type in ("POG", "POG2"):  # polygonal cells with variable node count
-            nod = med_cell_type_group["NOD"][()] - 1
-            inn = med_cell_type_group["INN"][()]
-            polygons = [
-                nod[inn[i] - 1 : inn[i + 1] - 1] for i in range(len(inn) - 1)
-            ]
-            cells.append((cell_type, polygons))
-        else:
-            nod = med_cell_type_group["NOD"]
-            n_cells = nod.attrs["NBR"]
-            data = nod[()].reshape(n_cells, -1, order="F") - 1
-            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
-            cells += [(cell_type, data)]
-
-        # Cell tags
-        if "FAM" in med_cell_type_group:
-            tags = med_cell_type_group["FAM"][()]
-            if "cell_tags" not in cell_data:
-                cell_data["cell_tags"] = []
-            cell_data["cell_tags"].append(tags)
+    cells, cell_types, cell_tags_data = _read_cells(mesh["MAI"])
+    if cell_tags_data is not None:
+        cell_data["cell_tags"] = cell_tags_data
 
     # Information for cell tags
     cell_tags = {}
