@@ -1,7 +1,7 @@
 import os
 import pathlib
 
-from .. import ansys, flac3d, gmsh, mdpa, ply, stl, vtk, vtu, xdmf
+from .. import ansys, flac3d, gmsh, mdpa, openfoam, ply, stl, vtk, vtu, xdmf
 from .._helpers import _filetypes_from_path, read, reader_map
 
 
@@ -42,6 +42,8 @@ def binary(args):
         gmsh.write(args.infile, mesh, binary=True)
     elif fmt == "mdpa":
         mdpa.write(args.infile, mesh, binary=True)
+    elif fmt == "openfoam":
+        openfoam.write(args.infile, mesh, binary=True)
     elif fmt == "ply":
         ply.write(args.infile, mesh, binary=True)
     elif fmt == "stl":
