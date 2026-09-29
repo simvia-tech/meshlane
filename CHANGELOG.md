@@ -6,6 +6,12 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Fixed
+- OpenFOAM reader: binary `faces` files as OpenFOAM writes them (`faceCompactList`)
+  are now read; they failed with a `ValueError`.
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added

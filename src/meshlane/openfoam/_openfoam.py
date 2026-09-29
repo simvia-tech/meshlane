@@ -175,6 +175,34 @@ def _read_binary_labels(path: Path, label_bytes: int = 4) -> np.ndarray:
     return np.frombuffer(raw, dtype=dtype, count=n, offset=start).astype(np.int64)
 
 
+def _foam_class(raw: bytes) -> str | None:
+    """The ``class`` entry of a FoamFile header."""
+    m = re.search(rb"class\s+(\w+)\s*;", raw[: raw.find(b"}")])
+    return m.group(1).decode() if m else None
+
+
+def _read_binary_compact_faces(raw: bytes, label_bytes: int) -> _RaggedArray:
+    """
+    Binary ``faceCompactList``, the layout OpenFOAM writes for binary faces::
+
+        N+1
+        (<(N+1)*label bytes: offset of each face in the node list>)
+        M
+        (<M*label bytes: the node ids of all faces, back to back>)
+    """
+    dtype = "<i4" if label_bytes == 4 else "<i8"
+    n_off, start = _data_start(raw)
+    off = np.frombuffer(raw, dtype=dtype, count=n_off, offset=start)
+    end = start + n_off * label_bytes  # the ')' closing the offsets
+    lp = raw.find(b"(", end + 1)
+    nums = re.findall(rb"\d+", raw[end + 1 : lp])
+    if lp == -1 or not nums:
+        raise ValueError("faces: missing node list of the faceCompactList")
+    n_conn = int(nums[-1])
+    conn = np.frombuffer(raw, dtype=dtype, count=n_conn, offset=lp + 1)
+    return _RaggedArray(conn.astype(np.int64), off.astype(np.int64))
+
+
 def _read_binary_faces(path: Path, label_bytes: int = 4) -> _RaggedArray:
     """
     Binary OpenFOAM faceList -> CSR ``_RaggedArray``.
@@ -200,6 +228,8 @@ def _read_binary_faces(path: Path, label_bytes: int = 4) -> _RaggedArray:
        ``view`` to the label dtype.
     """
     raw = path.read_bytes()
+    if _foam_class(raw) == "faceCompactList":
+        return _read_binary_compact_faces(raw, label_bytes)
     nfaces, pos = _data_start(raw)
 
     counts = np.empty(nfaces, dtype=np.int32)
