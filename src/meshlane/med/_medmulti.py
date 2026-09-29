@@ -30,7 +30,6 @@ from ._med import (
     meshio_to_med_type,
     med_geo_code,
     med_to_geo_type,
-    med_to_meshio_type,
     med_type_to_entity,
     numpy_to_med_type,
     numpy_void_str,
@@ -38,6 +37,7 @@ from ._med import (
     _med_str,
     _reorder_med_cells,
     _write_families,
+    _read_cells,
     _read_families,
     _families_to_point_sets,
     _families_to_cell_sets,
@@ -468,28 +468,9 @@ def _read_single_mesh(f, name):
         point_tags, point_tag_groups = _read_families(fas["NOEUD"])
 
     # Cells
-    cells = []
-    cell_types = []
-    med_cells = mesh_grp["MAI"]
-    for med_cell_type, med_cell_type_group in med_cells.items():
-        cell_type = med_to_meshio_type[med_cell_type]
-        cell_types.append(cell_type)
-        if med_cell_type in ("POG", "POG2"):
-            nod = med_cell_type_group["NOD"][()] - 1
-            inn = med_cell_type_group["INN"][()]
-            polygons = [nod[inn[i] - 1: inn[i + 1] - 1] for i in range(len(inn) - 1)]
-            cells.append((cell_type, polygons))
-        else:
-            nod = med_cell_type_group["NOD"]
-            n_cells = nod.attrs["NBR"]
-            data = nod[()].reshape(n_cells, -1, order="F") - 1
-            data = _reorder_med_cells(cell_type, data)  # MED -> meshlane order
-            cells += [(cell_type, data)]
-
-        if "FAM" in med_cell_type_group:
-            cell_data.setdefault("cell_tags", []).append(
-                med_cell_type_group["FAM"][()]
-            )
+    cells, cell_types, cell_tags_data = _read_cells(mesh_grp["MAI"])
+    if cell_tags_data is not None:
+        cell_data["cell_tags"] = cell_tags_data
 
     cell_tags, cell_tag_groups = {}, {}
     if fas is not None and "ELEME" in fas:

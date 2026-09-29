@@ -1816,3 +1816,59 @@ def test_orient_flip_perm_self_inverse():
         assert all(perm[perm[i]] == i for i in range(len(perm))), t
     for t in ("tetra10", "hexahedron20", "wedge15", "pyramid13"):
         assert t in _orient.ORIENTABLE_TYPES
+
+
+def test_read_polyhedra_and_blocks_without_families(tmp_path):
+    # Like snappyHexMesh output exported by Salome: volume blocks (HE8, POE)
+    # without FAM, boundary faces (QU4) with FAM.
+    from meshlane.med import read_med_multi
+
+    points = np.array(
+        [[x, y, z] for z in (0.0, 1.0) for y in (0.0, 1.0) for x in (0.0, 1.0, 2.0)]
+    )
+    hexa = [[0, 1, 4, 3, 6, 7, 10, 9]]
+    cube = [
+        [1, 2, 5, 4],
+        [7, 10, 11, 8],
+        [1, 7, 8, 2],
+        [4, 5, 11, 10],
+        [1, 4, 10, 7],
+        [2, 8, 11, 5],
+    ]
+    polyhedra = np.empty(1, dtype=object)
+    polyhedra[0] = [np.array(f) for f in cube]
+    mesh = meshlane.Mesh(
+        points,
+        [
+            ("hexahedron", hexa),
+            meshlane.CellBlock("polyhedron8", polyhedra),
+            ("quad", [[0, 3, 9, 6], [2, 8, 11, 5]]),
+        ],
+        cell_sets={"ends": [np.array([], dtype=int), np.array([], dtype=int), [0, 1]]},
+    )
+    path = tmp_path / "poly.med"
+    meshlane.write(path, mesh)
+    with h5py.File(path, "a") as f:
+        cells = next(iter(f["ENS_MAA"].values()))
+        cells = cells[next(iter(cells))]["MAI"] if "MAI" not in cells else cells["MAI"]
+        for med_type in ("HE8", "POE"):
+            if "FAM" in cells[med_type]:
+                del cells[med_type]["FAM"]
+
+    for m in [meshlane.read(path), read_med_multi(path)[0][0]]:
+        types = [b.type for b in m.cells]
+        assert sorted(types) == ["hexahedron", "polyhedron8", "quad"]
+        assert len(m.cell_data["cell_tags"]) == len(m.cells)
+        poly = m.cells[types.index("polyhedron8")]
+        assert sorted({int(v) for face in poly.data[0] for v in face}) == [
+            1,
+            2,
+            4,
+            5,
+            7,
+            8,
+            10,
+            11,
+        ]
+        ends = m.cell_sets["ends"]
+        assert len(ends[types.index("quad")]) == 2
