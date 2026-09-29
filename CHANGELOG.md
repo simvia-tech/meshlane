@@ -6,6 +6,14 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Added
+- OpenVolumeMesh `.ovm` (ASCII) reader and writer. Tetrahedra, pyramids, wedges and
+  hexahedra are rebuilt from the half-face topology; shared edges and faces are written
+  once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
+  Properties are skipped on reading, and point/cell data are not written. (#7)
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added
