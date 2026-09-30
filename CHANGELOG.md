@@ -6,6 +6,26 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Fixed
+- SU2: writing a mesh with boundary elements no longer fails with `cannot unpack
+  non-iterable CellBlock object`. Marker names are kept: the reader stores them in
+  `cell_sets` (and still in `cell_data["su2:tag"]`), the writer takes them from
+  `cell_sets`, the MED/OpenFOAM `cell_tags` families or the first integer cell data.
+  2D meshes with z = 0 coordinates are written as `NDIME= 2`. Files with Windows line
+  endings or spaces around `=` are read. Reading and writing are vectorized.
+- SU2: multi-zone files (`NZONE`/`IZONE`) are read and written as a list of meshes with
+  `meshlane.su2.read_multi` / `write_multi`, like multi-mesh MED files; they used to
+  give a corrupted mesh. `meshlane convert` and `meshlane info` handle them, e.g.
+  `meshlane convert cht.su2 cht.med` (one MED mesh per zone) and back.
+- SU2: the sections after the markers (periodicity, FFD boxes used by shape
+  optimization) are kept in `mesh.su2_extra` and written back unchanged, instead of
+  producing one warning per line and being lost. Quadratic cells are written with their
+  corner nodes instead of being dropped; unused points are removed; cells that are
+  neither domain nor boundary elements, and groups merged by marker name cleaning, are
+  reported.
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added
