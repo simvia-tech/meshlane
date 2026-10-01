@@ -4,8 +4,9 @@ Latest official up-to-date documentation and a reference C implementation at
 <https://github.com/LoicMarechal/libMeshb>
 """
 
-import struct
 from ctypes import c_double, c_float
+from dataclasses import dataclass
+import struct
 
 import numpy as np
 
@@ -15,6 +16,96 @@ from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
 from ._medit_internal import medit_codes
+
+
+
+
+## Type to store medit Cell metadata 
+@dataclass(frozen=True)
+class MeditCellInfo:
+    ascii_keyword: str
+    gmf_keyword: str
+    num_nodes: int
+    medit_to_meshlane: tuple[int, ...] | None = None
+
+MEDIT_CELLS: dict[str, MeditCellInfo] = {
+    # Linear elements
+    "line": MeditCellInfo("Edges", "GmfEdges", 2),
+    "triangle": MeditCellInfo("Triangles", "GmfTriangles", 3),
+    "quad": MeditCellInfo("Quadrilaterals", "GmfQuadrilaterals", 4),
+    "tetra": MeditCellInfo("Tetrahedra", "GmfTetrahedra", 4),
+    "wedge": MeditCellInfo("Prisms", "GmfPrisms", 6),
+    "pyramid": MeditCellInfo("Pyramids", "GmfPyramids", 5),
+    "hexahedron": MeditCellInfo("Hexahedra", "GmfHexahedra", 8),
+
+    # Higher-order edges
+    "line3": MeditCellInfo("EdgesP2", "GmfEdgesP2", 3),
+    "line4": MeditCellInfo("EdgesP3", "GmfEdgesP3", 4),
+    "line5": MeditCellInfo("EdgesP4", "GmfEdgesP4", 5),
+
+    # Higher-order faces
+    "triangle6": MeditCellInfo("TrianglesP2", "GmfTrianglesP2", 6),
+    "triangle10": MeditCellInfo("TrianglesP3", "GmfTrianglesP3", 10),
+    "triangle15": MeditCellInfo("TrianglesP4", "GmfTrianglesP4", 15),
+    "quad9": MeditCellInfo(
+        "QuadrilateralsQ2",
+        "GmfQuadrilateralsQ2",
+        9,
+    ),
+
+    # Higher-order volumes
+    "tetra10": MeditCellInfo("TetrahedraP2", "GmfTetrahedraP2", 10),
+    "wedge18": MeditCellInfo("PrismsP2", "GmfPrismsP2", 18),
+    "hexahedron27": MeditCellInfo(
+        "HexahedraQ2",
+        "GmfHexahedraQ2",
+        27,
+        medit_to_meshlane=(
+            *range(20),
+            25, 23, 22, 24, 20, 21, 26,
+        ),
+    ),
+}
+
+MESHLANE_FROM_MEDIT_BINARY = {
+    cell.gmf_keyword: (key, cell.num_nodes, cell.medit_to_meshlane) for key, cell in MEDIT_CELLS.items()
+}
+
+MESHLANE_FROM_MEDIT_ASCII = {
+    cell.ascii_keyword: (key, cell.num_nodes, cell.medit_to_meshlane) for key, cell in MEDIT_CELLS.items()
+}
+MESHLANE_FROM_MEDIT_ASCII["Hexaedra"] = MESHLANE_FROM_MEDIT_ASCII["Hexahedra"]  # alias 
+
+MEDIT_FROM_MESHLANE_ASCII = {
+    key: (cell.ascii_keyword, cell.num_nodes, cell.medit_to_meshlane) for key, cell in MEDIT_CELLS.items()
+}
+
+MEDIT_FROM_MESHLANE_BINARY = {
+    key: (cell.gmf_keyword, cell.num_nodes, cell.medit_to_meshlane) for key, cell in MEDIT_CELLS.items()
+}
+
+GMF_CODE_FROM_KEYWORD = {v[0]: k for k, v in medit_codes.items()}
+
+### Connectivity helpers 
+def from_medit_connectivity(
+    connectivity: np.ndarray,
+    medit_to_meshlane: tuple[int, ...] | None
+) -> np.ndarray:
+    if medit_to_meshlane is None:
+        return connectivity
+
+    return connectivity[:, medit_to_meshlane]
+
+
+def to_medit_connectivity(
+    connectivity: np.ndarray,
+    medit_to_meshlane: tuple[int, ...] | None
+    ) -> np.ndarray:
+    if medit_to_meshlane is None:
+        return connectivity
+
+    inverse = np.argsort(medit_to_meshlane)
+    return connectivity[:, inverse]
 
 
 def read(filename):
@@ -51,18 +142,6 @@ def _produce_dtype(string_type, dim, itype, ftype):
 
 
 def read_binary_buffer(f):
-
-    meshio_from_medit = {
-        "GmfVertices": ("point", None),
-        "GmfEdges": ("line", 2),
-        "GmfTriangles": ("triangle", 3),
-        "GmfQuadrilaterals": ("quad", 4),
-        "GmfTetrahedra": ("tetra", 4),
-        "GmfPrisms": ("wedge", 6),
-        "GmfPyramids": ("pyramid", 5),
-        "GmfHexahedra": ("hexahedron", 8),
-    }
-
     dim = 0
     points = None
     cells = []
@@ -150,19 +229,19 @@ def read_binary_buffer(f):
         field_template = field_code[2]
         dtype = np.dtype(_produce_dtype(field_template, dim, itype, ftype))
         out = np.asarray(np.fromfile(f, count=nitems, dtype=dtype))
-        if field_code[0] not in meshio_from_medit.keys():
-            warn(f"meshlane doesn't know {field_code[0]} type. Skipping.")
-            continue
-
-        elif field_code[0] == "GmfVertices":
+        if field_code[0] == "GmfVertices":
             points = out["f0"]
             point_data["medit:ref"] = out["f1"]
+        elif field_code[0] not in MESHLANE_FROM_MEDIT_BINARY.keys():
+            warn(f"meshlane doesn't know {field_code[0]} type. Skipping.")
+            continue
         else:
-            meshio_type, ncols = meshio_from_medit[field_code[0]]
+            meshio_type, ncols, medit2meshlane = MESHLANE_FROM_MEDIT_BINARY[field_code[0]]
             # transform the structured array to integer array which suffices
             # for the cell connectivity
             out_view = out.view(itype).reshape(nitems, ncols + 1)
-            cells.append((meshio_type, out_view[:, :ncols] - 1))
+            connectivity = from_medit_connectivity(out_view, medit2meshlane)
+            cells.append((meshio_type, connectivity[:, :ncols] - 1))
             cell_data["medit:ref"].append(out_view[:, -1])
 
     return Mesh(points, cells, point_data=point_data, cell_data=cell_data)
@@ -174,16 +253,6 @@ def read_ascii_buffer(f):
     point_data = {}
     cell_data = {"medit:ref": []}
 
-    meshio_from_medit = {
-        "Edges": ("line", 2),
-        "Triangles": ("triangle", 3),
-        "Quadrilaterals": ("quad", 4),
-        "Tetrahedra": ("tetra", 4),
-        "Prisms": ("wedge", 6),
-        "Pyramids": ("pyramid", 5),
-        "Hexahedra": ("hexahedron", 8),  # Frey
-        "Hexaedra": ("hexahedron", 8),  # Dobrzynski
-    }
     points = None
     dtype = None
 
@@ -223,17 +292,17 @@ def read_ascii_buffer(f):
             ).reshape(num_verts, dim + 1)
             points = out[:, :dim]
             point_data["medit:ref"] = out[:, dim].astype(int)
-        elif items[0] in meshio_from_medit:
-            meshio_type, points_per_cell = meshio_from_medit[items[0]]
+        elif items[0] in MESHLANE_FROM_MEDIT_ASCII:
+            meshio_type, points_per_cell, medit2meshlane = MESHLANE_FROM_MEDIT_ASCII[items[0]]
             # The first value is the number of elements
             num_cells = int(f.readline())
 
             out = np.fromfile(
                 f, count=num_cells * (points_per_cell + 1), dtype=int, sep=" "
             ).reshape(num_cells, points_per_cell + 1)
-
+            connectivity = from_medit_connectivity(out, medit2meshlane)
             # adapt for 0-base
-            cells.append((meshio_type, out[:, :points_per_cell] - 1))
+            cells.append((meshio_type, connectivity[:, :points_per_cell] - 1))
             cell_data["medit:ref"].append(out[:, -1])
         elif items[0] == "Corners":
             # those are just discarded
@@ -332,16 +401,6 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
         for x, label in zip(mesh.points, labels):
             fh.write(fmt.format(*x, label).encode())
 
-        medit_from_meshio = {
-            "line": ("Edges", 2),
-            "triangle": ("Triangles", 3),
-            "quad": ("Quadrilaterals", 4),
-            "tetra": ("Tetrahedra", 4),
-            "wedge": ("Prisms", 6),
-            "pyramid": ("Pyramids", 5),
-            "hexahedron": ("Hexahedra", 8),
-        }
-
         # pick out cell_data
         labels_key, other = _pick_first_int_data(mesh.cell_data)
         if labels_key and other:
@@ -354,8 +413,9 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
         for k, cell_block in enumerate(mesh.cells):
             cell_type = cell_block.type
             data = cell_block.data
+
             try:
-                medit_name, num = medit_from_meshio[cell_type]
+                medit_name, num, medit2meshlane = MEDIT_FROM_MESHLANE_ASCII[cell_type]
             except KeyError:
                 msg = f"MEDIT's mesh format doesn't know {cell_type} cells. Skipping."
                 warn(msg)
@@ -373,7 +433,8 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
 
             fmt = " ".join(["{:d}"] * (num + 1)) + "\n"
             # adapt 1-base
-            for d, label in zip(data + 1, labels):
+            connectivity = to_medit_connectivity(data, medit2meshlane)
+            for d, label in zip(connectivity + 1, labels):
                 fh.write(fmt.format(*d, label).encode())
 
         fh.write(b"\nEnd\n")
@@ -464,19 +525,10 @@ def write_binary_file(f, mesh):
                 f"Picking {labels_key}, skipping {string}."
             )
 
-        # first component is medit keyword id see _medit_internal.py
-        medit_from_meshio = {
-            "line": 5,
-            "triangle": 6,
-            "quad": 7,
-            "tetra": 8,
-            "wedge": 9,
-            "pyramid": 49,
-            "hexahedron": 10,
-        }
         for k, cell_block in enumerate(mesh.cells):
             try:
-                medit_key = medit_from_meshio[cell_block.type]
+                gmf_keyword, _, medit2meshlane = MEDIT_FROM_MESHLANE_BINARY[cell_block.type]
+                medit_key = GMF_CODE_FROM_KEYWORD[gmf_keyword]
             except KeyError:
                 warn(
                     f"MEDIT's mesh format doesn't know {cell_block.type} cells. "
@@ -506,10 +558,9 @@ def write_binary_file(f, mesh):
             dtype = np.dtype(_produce_dtype(field_template, dim, itype, ftype))
 
             tmp_array = np.empty(num_cells, dtype=dtype)
-            i = 0
-            for col_type in dtype.names[:-1]:
-                tmp_array[col_type] = cell_block.data[:, i] + 1
-                i += 1
+            data = to_medit_connectivity(cell_block.data, medit2meshlane)
+            for i, col_type in enumerate(dtype.names[:-1]):
+                tmp_array[col_type] = data[:, i] + 1
 
             tmp_array[dtype.names[-1]] = labels
             tmp_array.tofile(fh)
