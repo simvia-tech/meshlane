@@ -1,14 +1,23 @@
 """
 I/O SU2 mesh format
 <https://su2code.github.io/docs_v7/Mesh-File/>
+
+Boundary markers are read into ``cell_sets`` (one set per ``MARKER_TAG`` name)
+and into the integer ``cell_data["su2:tag"]``. On writing, markers come from
+``cell_sets``, else from the ``cell_tags`` families of the MED/OpenFOAM readers,
+else from the first integer cell data (e.g. ``gmsh:physical``).
+
+Multi-zone files (``NZONE``/``IZONE``) hold one independent mesh per zone: they
+are read and written with ``read_multi`` / ``write_multi`` as a list of meshes,
+like the multi-mesh MED functions. ``read`` rejects them.
 """
 
-from itertools import chain, islice
+import re
 
 import numpy as np
 
-from .._common import _pick_first_int_data, warn
-from .._exceptions import ReadError
+from .._common import warn
+from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
@@ -32,342 +41,491 @@ su2_to_meshio_type = {
     13: "wedge",
     14: "pyramid",
 }
-meshio_to_su2_type = {
-    "line": 3,
-    "triangle": 5,
-    "quad": 9,
-    "tetra": 10,
-    "hexahedron": 12,
-    "wedge": 13,
-    "pyramid": 14,
+meshio_to_su2_type = {v: k for k, v in su2_to_meshio_type.items()}
+# linear type of each (possibly higher-order) meshio type
+_linear_type = re.compile(r"(line|triangle|quad|tetra|pyramid|wedge|hexahedron)\d*$")
+
+# element types of the domain (NELEM) and of the markers, per dimension
+_volume_types = {
+    2: ("triangle", "quad"),
+    3: ("tetra", "hexahedron", "wedge", "pyramid"),
+}
+_boundary_types = {2: ("line",), 3: ("triangle", "quad")}
+
+_keyword = re.compile(r"^([A-Za-z_]+)\s*=\s*(.*?)\s*$")
+_default_marker = "boundary"
+_mesh_keywords = {
+    "NZONE",
+    "IZONE",
+    "NDIME",
+    "NPOIN",
+    "NELEM",
+    "NMARK",
+    "MARKER_TAG",
+    "MARKER_ELEMS",
 }
 
 
-def read(filename):
+_zone_name = re.compile(r"^%\s*meshlane zone name:\s*(.*?)\s*$")
 
+
+def read(filename):
     with open_file(filename, "r") as f:
-        mesh = read_buffer(f)
-    return mesh
+        return read_buffer(f)
 
 
 def read_buffer(f):
-    cells = []
-    cell_data = {"su2:tag": []}
+    zones = _split_zones(_lines(f))
+    if len(zones) > 1:
+        raise ReadError(
+            f"SU2: multi-zone file ({len(zones)} zones). Use "
+            "meshlane.su2.read_multi(), or convert it to MED "
+            "(meshlane convert file.su2 file.med) to keep every zone."
+        )
+    return _read_lines(zones[0][1])
 
-    itype = "i8"
-    ftype = "f8"
+
+def read_multi(filename):
+    """Read every zone of a (multi-zone) SU2 file.
+
+    Returns ``(meshes, names)``: one :class:`Mesh` per ``IZONE`` section, and the
+    zone names (``zone_<i>``, or the names ``write_multi`` stored).
+    """
+    with open_file(filename, "r") as f:
+        zones = _split_zones(_lines(f))
+    return [_read_lines(lines) for _, lines in zones], [name for name, _ in zones]
+
+
+def _lines(f):
+    text = f.read()
+    if isinstance(text, bytes):
+        text = text.decode()
+    # splitlines() also handles CRLF (Windows) files
+    return text.splitlines()
+
+
+def _split_zones(lines):
+    """[(zone name, lines of the zone)]; a single zone when there is no IZONE."""
+    starts = []
+    n_zones = None
+    for k, line in enumerate(lines):
+        match = _keyword.match(line.strip())
+        if match is None:
+            continue
+        key = match.group(1).upper()
+        if key == "IZONE":
+            starts.append((k, match.group(2)))
+        elif key == "NZONE" and n_zones is None:
+            n_zones = int(match.group(2))
+    if not starts:
+        return [("zone_1", lines)]
+    if n_zones is not None and n_zones != len(starts):
+        warn(f"SU2: NZONE= {n_zones} but {len(starts)} IZONE sections found.")
+
+    zones = []
+    ends = [k for k, _ in starts[1:]] + [len(lines)]
+    for (start, number), end in zip(starts, ends):
+        body = lines[start + 1 : end]
+        name = f"zone_{number}"
+        for line in body[:3]:
+            match = _zone_name.match(line.strip())
+            if match:
+                name = match.group(1)
+        zones.append((name, body))
+    return zones
+
+
+def _read_lines(lines):
     dim = 0
+    points = None
+    volume = []  # {cell type: connectivity} of each NELEM section
+    markers = []  # (name, tag, [{cell type: connectivity}, ...])
+    expected_markers = 0
+    tag = 0
 
-    next_tag_id = 0
-    expected_nmarkers = 0
-    markers_found = 0
-    while True:
-        line = f.readline()
-        if not line:
-            # EOF
-            break
+    # Other sections (NPERIODIC, FFD_* boxes...) are kept verbatim: they are
+    # rewritten as they are, as long as the points do not change.
+    extra = []
+    in_extra = False
 
-        line = line.strip()
-        if len(line) == 0:
+    k = 0
+    while k < len(lines):
+        raw = lines[k]
+        line = raw.strip()
+        k += 1
+        if not line or (line[0] == "%" and not in_extra):
             continue
-        if line[0] == "%":
-            continue
-
-        try:
-            name, rest_of_line = line.split("=")
-        except ValueError:
-            warn(f"meshlane could not parse line\n {line}\n skipping.....")
-            continue
-
-        if name == "NDIME":
-            dim = int(rest_of_line)
-            if dim != 2 and dim != 3:
-                raise ReadError(f"Invalid dimension value {line}")
-
-        elif name == "NPOIN":
-            # according to documentation rest_of_line should just be a int,
-            # and the next block should be just the coordinates of the points
-            # However, some file have one or two extra indices not related to the
-            # actual coordinates.
-            # So lets read the next line to find its actual number of columns
-            #
-            first_line = f.readline()
-            first_line = first_line.split()
-            first_line = np.array(first_line, dtype=ftype)
-
-            extra_columns = first_line.shape[0] - dim
-
-            num_verts = int(rest_of_line.split()[0]) - 1
-            points = np.fromfile(
-                f, count=num_verts * (dim + extra_columns), dtype=ftype, sep=" "
-            ).reshape(num_verts, dim + extra_columns)
-
-            # save off any extra info
-            if extra_columns > 0:
-                first_line = first_line[:-extra_columns]
-                points = points[:, :-extra_columns]
-
-            # add the first line we read separately
-            points = np.vstack([first_line, points])
-
-        elif name == "NELEM" or name == "MARKER_ELEMS":
-            # we cannot? read at once using numpy because we do not know the
-            # total size. Read, instead next num_elems as is and re-use the
-            # translate_cells function from vtk reader
-
-            num_elems = int(rest_of_line)
-            gen = islice(f, num_elems)
-
-            # some files has an extra int column while other not
-            # We do not need it so make sure we will skip it
-            first_line_str = next(gen)
-            first_line = first_line_str.split()
-            nnodes = su2_type_to_numnodes[int(first_line[0])]
-            has_extra_column = False
-            if nnodes + 1 == len(first_line):
-                has_extra_column = False
-            elif nnodes + 2 == len(first_line):
-                has_extra_column = True
+        match = _keyword.match(line)
+        key = match.group(1).upper() if match else None
+        if key not in _mesh_keywords:
+            if match or in_extra:
+                in_extra = True
+                extra.append(raw)
             else:
-                raise ReadError(f"Invalid number of columns for {name} field")
+                warn(f"SU2: could not parse line '{line}', skipping it.")
+            continue
+        in_extra = False
+        value = match.group(2)
 
-            # reset generator
-            gen = chain([first_line_str], gen)
-
-            cell_array = " ".join([line.rstrip("\n") for line in gen])
-            cell_array = np.fromiter(cell_array.split(), dtype=itype)
-
-            cells_, _ = _translate_cells(cell_array, has_extra_column)
-
-            for eltype, data in cells_.items():
-                cells.append(CellBlock(eltype, data))
-                num_block_elems = len(data)
-                if name == "NELEM":
-                    cell_data["su2:tag"].append(
-                        np.full(num_block_elems, 0, dtype=np.int32)
-                    )
-                else:
-                    tags = np.full(num_block_elems, next_tag_id, dtype=np.int32)
-                    cell_data["su2:tag"].append(tags)
-
-        elif name == "NMARK":
-            expected_nmarkers = int(rest_of_line)
-        elif name == "MARKER_TAG":
-            next_tag = rest_of_line
+        if key in ("NZONE", "IZONE"):
+            continue  # zones are split before (_split_zones)
+        elif key == "NDIME":
+            dim = int(value)
+            if dim not in (2, 3):
+                raise ReadError(f"SU2: invalid dimension NDIME= {value}.")
+        elif key == "NPOIN":
+            if dim == 0:
+                raise ReadError("SU2: NPOIN found before NDIME.")
+            count = int(value.split()[0])
+            points = _parse_points(lines[k : k + count], count, dim)
+            k += count
+        elif key in ("NELEM", "MARKER_ELEMS"):
+            count = int(value)
+            cells = _parse_elements(lines[k : k + count], count, key)
+            k += count
+            if key == "NELEM":
+                volume.append(cells)
+            elif not markers:
+                raise ReadError("SU2: MARKER_ELEMS found before any MARKER_TAG.")
+            else:
+                markers[-1][2].append(cells)
+        elif key == "NMARK":
+            expected_markers = int(value)
+        elif key == "MARKER_TAG":
+            # numeric tags keep their value, names are numbered from the last tag
             try:
-                next_tag_id = int(next_tag)
+                tag = int(value)
             except ValueError:
-                next_tag_id += 1
-                warn(
-                    "meshlane does not support tags of string type.\n"
-                    f"    Surface tag {rest_of_line} will be replaced by {next_tag_id}"
-                )
-            markers_found += 1
+                tag += 1
+            markers.append((value, tag, []))
 
-    if markers_found != expected_nmarkers:
+    if points is None:
+        raise ReadError("SU2: no NPOIN section found.")
+    if len(markers) != expected_markers:
         warn(
-            f"expected {expected_nmarkers} markers according to NMARK value "
-            f"but found only {markers_found}"
+            f"SU2: expected {expected_markers} markers according to NMARK, "
+            f"found {len(markers)}."
         )
 
-    # merge boundary elements in a single cellblock per cell type
-    if dim == 2:
-        types = ["line"]
-    else:
-        types = ["triangle", "quad"]
+    cells = []
+    tags = []
+    for section in volume:
+        for cell_type, data in section.items():
+            cells.append(CellBlock(cell_type, data))
+            tags.append(np.zeros(len(data), dtype=np.int32))
 
-    indices_to_merge = {}
-    for t in types:
-        indices_to_merge[t] = []
+    # one block per boundary cell type, all markers together
+    n_volume = len(cells)
+    boundary = {}  # cell type -> [(marker index, connectivity)]
+    for m, (_, _, sections) in enumerate(markers):
+        for section in sections:
+            for cell_type, data in section.items():
+                boundary.setdefault(cell_type, []).append((m, data))
+    marker_of_cell = []
+    for cell_type, parts in boundary.items():
+        cells.append(CellBlock(cell_type, np.concatenate([d for _, d in parts])))
+        which = np.concatenate([np.full(len(d), m) for m, d in parts])
+        marker_of_cell.append(which)
+        tags.append(np.array([markers[m][1] for m in which], dtype=np.int32))
 
-    for index, cell_block in enumerate(cells):
-        if cell_block.type in types:
-            indices_to_merge[cell_block.type].append(index)
+    cell_sets = {}
+    for m, (name, _, _) in enumerate(markers):
+        members = [np.array([], dtype=int)] * n_volume
+        members += [np.flatnonzero(which == m) for which in marker_of_cell]
+        if name in cell_sets:
+            members = [np.union1d(a, b) for a, b in zip(cell_sets[name], members)]
+        cell_sets[name] = members
 
-    cdata = cell_data["su2:tag"]
-    for type, indices in indices_to_merge.items():
-        if len(indices) > 1:
-            cells[indices[0]] = CellBlock(
-                type, np.concatenate([cells[i].data for i in indices])
-            )
-            cdata[indices[0]] = np.concatenate([cdata[i] for i in indices])
-
-    # delete merged blocks
-    idelete = []
-    for type, indices in indices_to_merge.items():
-        idelete += indices[1:]
-
-    for i in sorted(idelete, reverse=True):
-        del cells[i]
-        del cdata[i]
-
-    cell_data["su2:tag"] = cdata
-    return Mesh(points, cells, cell_data=cell_data)
+    mesh = Mesh(points, cells, cell_data={"su2:tag": tags}, cell_sets=cell_sets)
+    if extra:
+        mesh.su2_extra = "\n".join(extra) + "\n"
+        mesh.su2_extra_npoin = len(points)
+    return mesh
 
 
-def _translate_cells(data, has_extra_column=False):
-    # adapted from _vtk.py
-    # Translate input array  into the cells dictionary.
-    # `data` is a one-dimensional vector with
-    # (vtk cell type, p0, p1, ... ,pk, vtk cell type, p10, p11, ..., p1k, ...
+def _parse_points(lines, count, dim):
+    if len(lines) < count:
+        raise ReadError(f"SU2: expected {count} points, found {len(lines)}.")
+    if count == 0:
+        return np.empty((0, dim))
+    # some files add one or two index columns after the coordinates
+    n_columns = len(lines[0].split())
+    values = np.array(" ".join(lines).split(), dtype=float)
+    if n_columns < dim or values.size != count * n_columns:
+        raise ReadError("SU2: inconsistent number of columns in the NPOIN section.")
+    return values.reshape(count, n_columns)[:, :dim]
 
-    entry_offset = 1
-    if has_extra_column:
-        entry_offset += 1
 
-    # Collect types into bins.
-    # See <https://stackoverflow.com/q/47310359/353337> for better
-    # alternatives.
-    types = []
-    i = 0
-    while i < len(data):
-        types.append(data[i])
-        i += su2_type_to_numnodes[data[i]] + entry_offset
+def _parse_elements(lines, count, key):
+    """{cell type: connectivity} of ``count`` element lines ``type n0 n1 ...``,
+    each optionally followed by an element index."""
+    if len(lines) < count:
+        raise ReadError(f"SU2: expected {count} elements in {key}, found {len(lines)}.")
+    if count == 0:
+        return {}
+    lengths = np.fromiter((len(line.split()) for line in lines), dtype=int, count=count)
+    flat = np.array(" ".join(lines).split(), dtype=np.int64)
+    starts = np.cumsum(lengths) - lengths
+    types = flat[starts]
 
-    types = np.array(types)
-    bins = {u: np.where(types == u)[0] for u in np.unique(types)}
-
-    # Deduct offsets from the cell types. This is much faster than manually
-    # going through the data array. Slight disadvantage: This doesn't work for
-    # cells with a custom number of points.
-    numnodes = np.empty(len(types), dtype=int)
-    for tpe, idx in bins.items():
-        numnodes[idx] = su2_type_to_numnodes[tpe]
-    offsets = np.cumsum(numnodes + entry_offset) - (numnodes + entry_offset)
+    n_nodes = np.full(max(su2_type_to_numnodes) + 1, -1)
+    for su2_type, n in su2_type_to_numnodes.items():
+        n_nodes[su2_type] = n
+    if types.min() < 0 or types.max() >= len(n_nodes) or np.any(n_nodes[types] < 0):
+        unknown = sorted(set(types.tolist()) - set(su2_type_to_numnodes))
+        raise ReadError(f"SU2: unknown element type(s) {unknown} in {key}.")
+    extra = lengths - 1 - n_nodes[types]
+    if np.any((extra < 0) | (extra > 1)):
+        raise ReadError(f"SU2: invalid number of columns in {key}.")
 
     cells = {}
-    cell_data = {}
-    for tpe, b in bins.items():
-        meshio_type = su2_to_meshio_type[tpe]
-        nnodes = su2_type_to_numnodes[tpe]
-        indices = np.add.outer(offsets[b], np.arange(1, nnodes + 1))
-        cells[meshio_type] = data[indices]
+    for su2_type in np.unique(types):
+        rows = starts[types == su2_type]
+        n = su2_type_to_numnodes[int(su2_type)]
+        cells[su2_to_meshio_type[int(su2_type)]] = flat[
+            rows[:, None] + 1 + np.arange(n)
+        ]
+    return cells
 
-    return cells, cell_data
+
+def write(filename, mesh, float_fmt=".17g"):
+    with open_file(filename, "w") as f:
+        _write_zone(f, mesh, float_fmt)
 
 
-def write(filename, mesh):
+def write_multi(filename, meshes, mesh_names=None, float_fmt=".17g", **kwargs):
+    """Write several meshes as the zones of a multi-zone SU2 file.
 
-    with open_file(filename, "wb") as f:
-        dim = mesh.points.shape[1]
-        f.write(f"NDIME= {dim}\n".encode())
+    The zone names (``mesh_names``) are stored in comments, which SU2 ignores,
+    so that ``read_multi`` gives them back.
+    """
+    if mesh_names is not None and len(mesh_names) != len(meshes):
+        raise WriteError("SU2: one name per mesh expected.")
+    with open_file(filename, "w") as f:
+        f.write(f"NZONE= {len(meshes)}\n")
+        for i, mesh in enumerate(meshes):
+            f.write(f"IZONE= {i + 1}\n")
+            if mesh_names is not None:
+                f.write(f"% meshlane zone name: {mesh_names[i]}\n")
+            _write_zone(f, mesh, float_fmt)
 
-        # Write points
-        num_points = mesh.points.shape[0]
-        f.write(f"NPOIN= {num_points}\n".encode())
-        np.savetxt(f, mesh.points)
 
-        # Through warnings about unsupported types
-        for cell_block in mesh.cells:
-            if cell_block.type not in meshio_to_su2_type:
-                warn(
-                    ".su2 does not support tags elements of type {}.\n"
-                    "Skipping ...".format(type)
-                )
+def _write_zone(f, mesh, float_fmt):
+    points = np.asarray(mesh.points, dtype=float)
 
-        # Write `internal` cells
+    # SU2 only has linear cells: quadratic ones are written with their corners
+    written = []  # (block index, linear cell type, connectivity)
+    unsupported, quadratic = set(), set()
+    for b, cell_block in enumerate(mesh.cells):
+        match = _linear_type.match(cell_block.type)
+        if not match or cell_block.type == "vertex":
+            unsupported.add(cell_block.type)
+            continue
+        linear = match.group(1)
+        data = np.asarray(cell_block.data)
+        if cell_block.type != linear:
+            quadratic.add(cell_block.type)
+            data = data[:, : su2_type_to_numnodes[meshio_to_su2_type[linear]]]
+        written.append((b, linear, data))
+    if unsupported:
+        warn(
+            f"SU2 does not support cells of type {', '.join(sorted(unsupported))}; skipped."
+        )
+    if quadratic:
+        warn(
+            f"SU2: only the corner nodes of {', '.join(sorted(quadratic))} cells "
+            "are used."
+        )
 
-        types = None
-        if dim == 2:
-            # `internal` cells are considered to be triangles and quads
-            types = ["triangle", "quad"]
-        else:
-            types = ["tetra", "hexahedron", "wedge", "pyramid"]
+    dim = 3 if any(t in _volume_types[3] for _, t, _ in written) else 2
+    volume = [(t, d) for _, t, d in written if t in _volume_types[dim]]
+    boundary = [(b, t, d) for b, t, d in written if t in _boundary_types[dim]]
+    _report_skipped(
+        mesh,
+        [
+            (b, t)
+            for b, t, _ in written
+            if t not in (_volume_types[dim] + _boundary_types[dim])
+        ],
+        dim,
+    )
 
-        cells = [c for c in mesh.cells if c.type in types]
-        total_num_volume_cells = sum(len(c.data) for c in cells)
-        f.write(f"NELEM= {total_num_volume_cells}\n".encode())
-
-        for cell_block in cells:
-            cell_type = meshio_to_su2_type[cell_block.type]
-            # create a column with the value cell_type
-            type_column = np.full(
-                cell_block.data.shape[0],
-                cell_type,
-                dtype=cell_block.data.dtype,
+    if dim == 2 and points.shape[1] == 3:
+        # 2D meshes from Gmsh, Salome... come with z = 0
+        if len(points) and np.ptp(points[:, 2]) > 0:
+            raise WriteError(
+                "SU2: a mesh without volume cells must be planar (constant z); "
+                "surface meshes in 3D cannot be written."
             )
+        points = points[:, :2]
+    if points.shape[1] != dim:
+        raise WriteError(f"SU2: {dim}D cells need {dim}D points.")
 
-            # prepend a column with the value cell_type
-            cell_block_to_write = np.column_stack([type_column, cell_block.data])
-            np.savetxt(f, cell_block_to_write, fmt="%d")
+    markers = _markers(mesh, boundary)
 
-        # write boundary information
+    # drop the points no written cell uses (mid-edge nodes, skipped cells...)
+    used = np.zeros(len(points), dtype=bool)
+    for _, data in volume:
+        used[data.ravel()] = True
+    for _, parts in markers:
+        for _, data in parts:
+            used[data.ravel()] = True
+    renumbered = not used.all()
+    if renumbered:
+        warn(f"SU2: {int(np.sum(~used))} point(s) not used by any cell dropped.")
+        new_index = np.cumsum(used) - 1
+        points = points[used]
+        volume = [(t, new_index[d]) for t, d in volume]
+        markers = [(n, [(t, new_index[d]) for t, d in parts]) for n, parts in markers]
 
-        labels_key, other = _pick_first_int_data(mesh.cell_data)
-        if labels_key and other:
-            warn(
-                "su2 file format can only write one cell data array. "
-                "Picking {}, skipping {}.".format(labels_key, ", ".join(other))
-            )
+    extra = getattr(mesh, "su2_extra", None)
+    if extra and (renumbered or getattr(mesh, "su2_extra_npoin", None) != len(points)):
+        warn(
+            "SU2: the points changed, so the extra sections of the original file "
+            "(periodicity, FFD boxes) that refer to them are not written."
+        )
+        extra = None
 
-        if dim == 2:
-            types = ["line"]
-        else:
-            types = ["triangle", "quad"]
+    f.write(f"NDIME= {dim}\n")
+    f.write(f"NELEM= {sum(len(d) for _, d in volume)}\n")
+    for cell_type, data in volume:
+        f.write(_element_lines(cell_type, data))
+    f.write(f"NPOIN= {len(points)}\n")
+    fmt = " ".join([f"%{float_fmt}"] * dim) + "\n"
+    f.write("".join(map(fmt.__mod__, map(tuple, points.tolist()))))
+    f.write(f"NMARK= {len(markers)}\n")
+    for name, parts in markers:
+        f.write(f"MARKER_TAG= {name}\n")
+        f.write(f"MARKER_ELEMS= {sum(len(data) for _, data in parts)}\n")
+        for cell_type, data in parts:
+            f.write(_element_lines(cell_type, data))
+    if extra:
+        f.write(extra)
 
-        tags_per_cell_block = dict()
 
-        # We want to separate boundary elements in groups of same tag
+def _report_skipped(mesh, skipped, dim):
+    """Warn about cells neither in the domain nor on its boundary (lines in 3D)."""
+    if not skipped:
+        return
+    types = sorted({t for _, t in skipped})
+    blocks = {b for b, _ in skipped}
+    groups = sorted(
+        name
+        for name, members in mesh.cell_sets.items()
+        if any(
+            b < len(members) and members[b] is not None and len(members[b])
+            for b in blocks
+        )
+    )
+    warn(
+        f"SU2: {', '.join(types)} cells are neither domain nor boundary elements "
+        f"of a {dim}D mesh; skipped"
+        + (f" (groups: {', '.join(groups)})." if groups else ".")
+    )
 
-        # First, find unique tags and how many elements per tags we have
-        for index, cell_block in enumerate(mesh.cells):
 
-            if cell_block.type not in types:
-                continue
+def _element_lines(cell_type, data):
+    data = np.asarray(data)
+    rows = np.column_stack([np.full(len(data), meshio_to_su2_type[cell_type]), data])
+    fmt = " ".join(["%d"] * rows.shape[1]) + "\n"
+    return "".join(map(fmt.__mod__, map(tuple, rows.tolist())))
 
-            labels = (
-                mesh.cell_data[labels_key][index]
-                if labels_key
-                else np.ones(len(cell_block), dtype=cell_block.data.dtype)
-            )
 
-            # Get unique tags and number of instances of each tag for this Cell block
-            tags_tmp, counts_tmp = np.unique(labels, return_counts=True)
+def _marker_name(name):
+    name = re.sub(r"\s+", "_", str(name).strip())
+    return name or _default_marker
 
-            for tag, count in zip(tags_tmp, counts_tmp):
-                if tag not in tags_per_cell_block:
-                    tags_per_cell_block[tag] = count
-                else:
-                    tags_per_cell_block[tag] += count
 
-        f.write(f"NMARK= {len(tags_per_cell_block)}\n".encode())
+def _markers(mesh, boundary):
+    """[(marker name, [(cell type, connectivity), ...]), ...] for boundary cells.
 
-        # write the blocks you found in previous step
-        for tag, count in tags_per_cell_block.items():
+    ``boundary`` lists the ``(block index, cell type, connectivity)`` written.
+    """
+    blocks = [b for b, _, _ in boundary]
+    names = []  # marker names, in order of first appearance
+    origin = {}  # marker name -> first group name that gave it
+    collisions = set()
+    labels = {b: np.full(len(d), -1) for b, _, d in boundary}  # name index
 
-            f.write(f"MARKER_TAG= {tag}\n".encode())
-            f.write(f"MARKER_ELEMS= {count}\n".encode())
+    def index_of(name):
+        marker = _marker_name(name)
+        if marker not in names:
+            names.append(marker)
+            origin[marker] = str(name)
+        elif origin[marker] != str(name):
+            collisions.add(f"{origin[marker]!r} and {str(name)!r} -> {marker}")
+        return names.index(marker)
 
-            for index, (cell_type, data) in enumerate(mesh.cells):
-
-                if cell_type not in types:
+    sets = {k: v for k, v in mesh.cell_sets.items() if not k.startswith("gmsh:")}
+    tags = mesh.cell_data.get("cell_tags")
+    families = getattr(mesh, "cell_tags", None) or {}
+    if sets:
+        n_overlaps = 0
+        for name, members in sets.items():
+            for b in blocks:
+                if b >= len(members) or members[b] is None or len(members[b]) == 0:
                     continue
+                idx = np.asarray(members[b], dtype=int)
+                free = labels[b][idx] < 0
+                n_overlaps += int(np.sum(~free))
+                labels[b][idx[free]] = index_of(name)
+        if n_overlaps:
+            warn(
+                f"SU2: {n_overlaps} boundary cell(s) belong to several groups; "
+                "each is put in the first of its groups."
+            )
+    elif tags is not None and families:
+        # markers in the order of the family table
+        for tag, groups in families.items():
+            if not groups:
+                continue
+            for b in blocks:
+                selected = tags[b] == tag
+                if np.any(selected):
+                    labels[b][selected] = index_of(groups[0])
+    else:
+        # the first integer cell data defined on the boundary blocks
+        candidates = [
+            key
+            for key, values in mesh.cell_data.items()
+            if any(values[b] is not None for b in blocks)
+            and all(
+                values[b] is None or np.asarray(values[b]).dtype.kind in "iu"
+                for b in blocks
+            )
+        ]
+        if candidates:
+            key = candidates[0]
+            other = [k for k in mesh.cell_data if k != key]
+            if other:
+                warn(f"SU2: markers taken from {key}, ignoring {', '.join(other)}.")
+            for b in blocks:
+                values = mesh.cell_data[key][b]
+                if values is None:
+                    continue
+                values = np.asarray(values).ravel()
+                for tag in np.unique(values):
+                    labels[b][values == tag] = index_of(tag)
 
-                labels = (
-                    mesh.cell_data[labels_key][index]
-                    if labels_key
-                    else np.ones(len(data), dtype=data.dtype)
-                )
+    if any(np.any(labels[b] < 0) for b in blocks):
+        default = index_of(_default_marker)
+        for b in blocks:
+            labels[b][labels[b] < 0] = default
 
-                # Pick elements with given tag
-                mask = np.where(labels == tag)
+    if collisions:
+        warn(f"SU2: groups merged into one marker: {'; '.join(sorted(collisions))}.")
 
-                cells_to_write = data[mask]
-
-                cell_type = meshio_to_su2_type[cell_type]
-
-                # create a column with the value cell_type
-                type_column = np.full(
-                    cells_to_write.shape[0],
-                    cell_type,
-                    dtype=cells_to_write.dtype,
-                )
-
-                # prepend a column with the value cell_type
-                cell_block_to_write = np.column_stack([type_column, cells_to_write])
-                np.savetxt(f, cell_block_to_write, fmt="%d")
-
-    return
+    data_of = {b: d for b, _, d in boundary}
+    type_of = {b: t for b, t, _ in boundary}
+    markers = []
+    for k, name in enumerate(names):
+        parts = []
+        for b in blocks:
+            selected = labels[b] == k
+            if np.any(selected):
+                parts.append((type_of[b], data_of[b][selected]))
+        markers.append((name, parts))
+    return markers
 
 
 register_format("su2", [".su2"], read, {"su2": write})
