@@ -381,6 +381,136 @@ class TestWrite:
         assert "NBLOCK" in content
 
 
+# Tests: 2D (plane) meshes -> PLANE182/183, boundary edges -> node components
+
+class TestPlane2D:
+    """A 2D mesh (points with 2 columns) is a plane model: surface elements
+    become PLANE182/183, and 1D boundary blocks are dropped and re-expressed as
+    node components (see issue #37)."""
+
+    def _plane_mesh(self):
+        # a single triangle6 surface plus one line3 boundary edge grouped as "edge"
+        points = np.array(
+            [
+                [0.0, 0.0], [1.0, 0.0], [0.0, 1.0],
+                [0.5, 0.0], [0.5, 0.5], [0.0, 0.5],
+            ],
+            dtype=float,
+        )
+        cells = [
+            CellBlock("line3", np.array([[0, 1, 3]])),
+            CellBlock("triangle6", np.array([[0, 1, 2, 3, 4, 5]])),
+        ]
+        # group "edge" references the single line3 element (block 0, local 0);
+        # group "surf" references the triangle6 (block 1, local 0)
+        cell_sets = {
+            "edge": [np.array([0]), np.array([], dtype=int)],
+            "surf": [np.array([], dtype=int), np.array([0])],
+        }
+        return Mesh(points, cells, cell_sets=cell_sets)
+
+    def test_quadratic_surface_is_plane183(self):
+        content = _write_to_str(self._plane_mesh())
+        assert "ET,1,183" in content
+        assert "281" not in content  # no SHELL281
+        assert "189" not in content  # no BEAM189
+
+    def test_linear_surface_is_plane182(self):
+        mesh = Mesh(
+            points=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+            cells=[CellBlock("triangle", np.array([[0, 1, 2]]))],
+        )
+        assert "ET,1,182" in _write_to_str(mesh)
+
+    def test_plane183_triangle_has_keyopt1_1(self):
+        # PLANE183 triangle6 must declare KEYOPT(1)=1 (6-node triangle), right
+        # after its ET line, or ANSYS assumes the 8-node quad form (issue #37)
+        content = _write_to_str(self._plane_mesh())
+        assert "ET,1,183\nKEYOPT,1,1,1\n" in content
+
+    def test_plane183_quad_has_keyopt1_0(self):
+        # PLANE183 quad8 must declare KEYOPT(1)=0 (8-node quadrilateral)
+        mesh = Mesh(
+            points=np.array(
+                [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0],
+                 [1.0, 0.0], [2.0, 1.0], [1.0, 2.0], [0.0, 1.0]],
+                dtype=float,
+            ),
+            cells=[CellBlock("quad8", np.array([[0, 1, 2, 3, 4, 5, 6, 7]]))],
+        )
+        assert "ET,1,183\nKEYOPT,1,1,0\n" in _write_to_str(mesh)
+
+    def test_plane182_has_no_keyopt(self):
+        # PLANE182 (linear) has no shape KEYOPT
+        mesh = Mesh(
+            points=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+            cells=[CellBlock("triangle", np.array([[0, 1, 2]]))],
+        )
+        assert "KEYOPT" not in _write_to_str(mesh)
+
+    def test_boundary_line_dropped_from_eblock(self):
+        # only the 1 surface element is written; the line3 edge is dropped
+        content = _write_to_str(self._plane_mesh())
+        assert "EBLOCK,19,SOLID,1,1" in content
+
+    def test_boundary_group_becomes_node_component(self):
+        content = _write_to_str(self._plane_mesh())
+        assert "CMBLOCK,edge,NODE" in content
+
+    def test_surface_group_stays_element_component(self):
+        content = _write_to_str(self._plane_mesh())
+        assert "CMBLOCK,surf,ELEM" in content
+
+    def test_3d_surface_still_shell(self):
+        # a genuinely 3D triangle6 must remain SHELL281, not become PLANE
+        mesh = Mesh(
+            points=np.array(
+                [
+                    [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0],
+                    [0.5, 0.0, 0.0], [0.5, 0.5, 0.5], [0.0, 0.5, 0.5],
+                ],
+                dtype=float,
+            ),
+            cells=[CellBlock("triangle6", np.array([[0, 1, 2, 3, 4, 5]]))],
+        )
+        assert "ET,1,281" in _write_to_str(mesh)
+
+    def _plane_2d_mesh(self):
+        return Mesh(
+            points=np.array(
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0],
+                 [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]],
+                dtype=float,
+            ),
+            cells=[CellBlock("triangle6", np.array([[0, 1, 2, 3, 4, 5]]))],
+        )
+
+    def test_read_plane_cdb_is_2d(self):
+        # a PLANE model written to CDB must read back as 2D (points has 2 cols),
+        # so CDB->CDB re-exports as PLANE and CDB->MED gives a 2D mesh
+        restored = _read_from_str(_write_to_str(self._plane_2d_mesh()))
+        assert restored.points.shape[1] == 2
+        assert restored.cells[0].type == "triangle6"
+
+    def test_plane_cdb_to_cdb_stays_plane183(self):
+        restored = _read_from_str(_write_to_str(self._plane_2d_mesh()))
+        assert "ET,1,183" in _write_to_str(restored)
+
+    def test_flat_shell_cdb_stays_3d(self):
+        # same flat geometry but SHELL281 (from a 3D source) must NOT collapse to
+        # 2D: the plane/shell distinction comes from the element family, not z
+        mesh = Mesh(
+            points=np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                 [0.5, 0.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.5, 0.0]],
+                dtype=float,
+            ),
+            cells=[CellBlock("triangle6", np.array([[0, 1, 2, 3, 4, 5]]))],
+        )
+        restored = _read_from_str(_write_to_str(mesh))
+        assert restored.points.shape[1] == 3
+
+
 # Tests: roundtrip read -> write -> read
 
 class TestRoundtrip:
