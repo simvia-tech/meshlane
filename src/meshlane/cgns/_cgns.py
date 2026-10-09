@@ -25,8 +25,8 @@ from .._mesh import Mesh
 # CGNS ElementType_t enum value -> (meshio cell type, nodes per cell).
 # A nodes-per-cell of None marks the two variable-length "poly" element types,
 # NGON_n (polygonal faces) and NFACE_n (polyhedral cells), which are handled
-# separately. Linear element node orderings match meshio's directly; higher-
-# order orderings are assumed to coincide with CGNS' and are not permuted.
+# separately. Linear element orderings match meshio's directly; higher-order
+# types whose orderings differ are permuted (see _cgns_to_meshio_perm).
 _cgns_to_meshio_type = {
     2: ("vertex", 1),  # NODE
     3: ("line", 2),  # BAR_2
@@ -50,6 +50,38 @@ _cgns_to_meshio_type = {
     22: ("polygon", None),  # NGON_n
     23: ("polyhedron", None),  # NFACE_n
 }
+
+# Node permutations between CGNS and meshio (VTK) orderings, for the element
+# types where they differ. ``conn_meshio = conn_cgns[:, perm]``. Types not listed
+# (line3, triangle6, quad8, quad9, tetra10, ...) are assumed to share meshio's
+# ordering; pyramid13/pyramid14 are unverified (see _UNVERIFIED_ORDER).
+_cgns_to_meshio_perm = {
+    # CGNS: bottom edges, vertical edges, top edges.
+    # VTK:  bottom edges, top edges, vertical edges.
+    "hexahedron20": [*range(12), 16, 17, 18, 19, 12, 13, 14, 15],
+    # Same edge swap, then face centres: CGNS orders them
+    # zmin, ymin, xmax, ymax, xmin, zmax; VTK orders xmin, xmax, ymin, ymax, zmin, zmax.
+    "hexahedron27": [*range(12), 16, 17, 18, 19, 12, 13, 14, 15, 24, 22, 21, 23, 20, 25, 26],
+    "wedge15": [*range(9), 12, 13, 14, 9, 10, 11],
+    "wedge18": [*range(9), 12, 13, 14, 9, 10, 11, 15, 16, 17],
+}
+_meshio_to_cgns_perm = {k: np.argsort(v) for k, v in _cgns_to_meshio_perm.items()}
+
+# These share meshio's ordering as far as we can tell, but it has not been
+# checked against an independent CGNS producer (unlike the permuted types, which
+# were verified against VTK's CGNS reader). Warn so a wrong ordering cannot pass
+# silently.
+_UNVERIFIED_ORDER = {"pyramid13", "pyramid14"}
+
+
+def _warn_unverified(cell_type, seen):
+    if cell_type in _UNVERIFIED_ORDER and cell_type not in seen:
+        seen.add(cell_type)
+        warn(
+            f"CGNS: {cell_type} node ordering is unverified: its higher-order "
+            "nodes may be misplaced."
+        )
+
 
 NGON_N = 22
 NFACE_N = 23
@@ -156,7 +188,7 @@ def _resolve_polyhedra(cell_offsets, cell_faces, faces_by_number):
     return list(blocks.items())
 
 
-def _read_mixed_section(section, name):
+def _read_mixed_section(section, name, warned):
     """Split a ``MIXED`` (element type 20) section into per-type cell blocks.
 
     MIXED connectivity is a flat stream in which every element is prefixed by
@@ -202,12 +234,20 @@ def _read_mixed_section(section, name):
             conn[start + 1 : start + 1 + nodes_per_cell] - 1
         )
 
-    return [(t, np.array(v, dtype=np.int64)) for t, v in groups.items()]
+    blocks = []
+    for t, v in groups.items():
+        data = np.array(v, dtype=np.int64)
+        if t in _cgns_to_meshio_perm:
+            data = data[:, _cgns_to_meshio_perm[t]]
+        _warn_unverified(t, warned)
+        blocks.append((t, data))
+    return blocks
 
 
 def _read_elements(zone):
     cells = []
     n_sections = 0
+    warned = set()
 
     # NGON_n faces must be read before NFACE_n cells can be resolved. Collect
     # every NGON_n face keyed by its global CGNS element number so NFACE_n cells
@@ -222,7 +262,7 @@ def _read_elements(zone):
         n_sections += 1
 
         if code == MIXED:
-            cells.extend(_read_mixed_section(section, section.name))
+            cells.extend(_read_mixed_section(section, section.name, warned))
             continue
 
         info = _cgns_to_meshio_type.get(code)
@@ -254,7 +294,11 @@ def _read_elements(zone):
             start, end = _index_array(section["ElementRange"])
             n_cells = int(end - start + 1)
             conn = _index_array(section["ElementConnectivity"])
-            cells.append((meshio_type, conn.reshape(n_cells, nodes_per_cell) - 1))
+            data = conn.reshape(n_cells, nodes_per_cell) - 1
+            if meshio_type in _cgns_to_meshio_perm:
+                data = data[:, _cgns_to_meshio_perm[meshio_type]]
+            _warn_unverified(meshio_type, warned)
+            cells.append((meshio_type, data))
 
     if nface_offsets is not None:
         if not faces_by_number:
@@ -550,6 +594,7 @@ def _write_elements(zone, mesh, compression, compression_opts):
     """
     next_start = 1  # 1-based CGNS element numbering
     section_id = 0
+    warned = set()
     polyhedra = []  # accumulated across all polyhedron blocks
     # Maps a face's node set to (global CGNS element number, canonical node
     # order) so polyhedra can reference existing polygon faces.
@@ -596,6 +641,9 @@ def _write_elements(zone, mesh, compression, compression_opts):
             continue
         code, _ = info
         arr = np.asarray(data, dtype=np.int64)
+        if ctype in _meshio_to_cgns_perm:
+            arr = arr[:, _meshio_to_cgns_perm[ctype]]
+        _warn_unverified(ctype, warned)
         n = len(arr)
         section_id += 1
         _write_element_section(
