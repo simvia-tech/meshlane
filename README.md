@@ -36,6 +36,7 @@ and writes all of the following and converts smoothly between them:
 > [OBJ](https://en.wikipedia.org/wiki/Wavefront_.obj_file) (`.obj`),
 > [OFF](https://segeval.cs.princeton.edu/public/off_format.html) (`.off`),
 > **OpenFOAM polyMesh** (.foam, read only),
+> **[OpenVolumeMesh](https://www.graphics.rwth-aachen.de/software/openvolumemesh/)** (`.ovm`, ASCII),
 > [PERMAS](https://www.intes.de) (`.post`, `.post.gz`, `.dato`, `.dato.gz`),
 > [PLY](<https://en.wikipedia.org/wiki/PLY_(file_format)>) (`.ply`),
 > [STL](<https://en.wikipedia.org/wiki/STL_(file_format)>) (`.stl`),
@@ -53,6 +54,9 @@ and writes all of the following and converts smoothly between them:
 
 - **OpenFOAM polyMesh reader**: ASCII and binary, arbitrary cell types (tri / quad / polyhedra).
 - **Ansys/APDL** `.inp` / `.cdb` reader & writer for FEA interoperability.
+- **OpenVolumeMesh** `.ovm` reader & writer (tetra, pyramid, wedge and hexahedron
+  cells), e.g. to convert the output of the [AlgoHex](https://github.com/cgg-bern/AlgoHex)
+  hexahedral mesher.
 - **MED/Salome improvements:**
   - multi-mesh files (several meshes in one `.med`)
   - polygon cell support, including ragged/Voronoi meshes
