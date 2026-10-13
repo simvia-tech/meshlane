@@ -6,6 +6,16 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Fixed
+- MED: files mixing blocks with and without families (e.g. volume cells without
+  `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
+  Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
+  families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
+  (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
+  readers share the same cell reading code.
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added
