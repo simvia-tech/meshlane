@@ -104,3 +104,26 @@ def solution(zone, name, fields, location=None, rind=None):
     for field, values in fields.items():
         node(sol, field, "DataArray_t", np.asarray(values, dtype=float))
     return sol
+
+
+def structured_zone(parent, x, name="Block"):
+    """A structured zone; x has shape (ni, nj[, nk], dim)."""
+    size = np.array(x.shape[:-1])
+    zone_size = np.stack([size, size - 1, np.zeros_like(size)], axis=1)
+    zone = node(parent, name, "Zone_t", zone_size.astype(np.int64))
+    node(zone, "ZoneType", "ZoneType_t", "Structured")
+    grid = node(zone, "GridCoordinates", "GridCoordinates_t")
+    for k, axis in enumerate("XYZ"[: x.shape[-1]]):
+        node(grid, f"Coordinate{axis}", "DataArray_t", np.asarray(x[..., k], float))
+    return zone
+
+
+def point_range(parent, name, label, lo, hi, location=None, value="BCWall"):
+    """A node holding a structured PointRange (1-based, per direction); value is
+    the BC type of a BC, the donor zone of a connectivity."""
+    rng = np.array([lo, hi], dtype=np.int64).T
+    group = node(parent, name, label, value)
+    node(group, "PointRange", "IndexRange_t", rng)
+    if location is not None:
+        node(group, "GridLocation", "GridLocation_t", location)
+    return group

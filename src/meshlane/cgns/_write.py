@@ -241,19 +241,35 @@ def _outward_faces(block):
 
 
 def write(filename, mesh, compression=None, compression_opts=None):
+    write_multi(filename, [mesh], ["Zone"], compression, compression_opts)
+
+
+def write_multi(
+    filename, meshes, mesh_names=None, compression=None, compression_opts=None
+):
+    """Write several meshes to one CGNS file: one base, one zone per mesh. The
+    groups of all zones share the families of the base."""
     import h5py
 
-    points = np.asarray(mesh.points, dtype=float)
-    if points.ndim != 2 or points.shape[1] not in (2, 3):
-        raise WriteError(f"CGNS points must be 2D or 3D, got shape {points.shape}.")
-    blocks = list(mesh.cells)
-    for block in blocks:
-        if block.type not in _CODES and not block.type.startswith(
-            ("polygon", "polyhedron")
-        ):
-            raise WriteError(f"Cannot write {block.type} cells to CGNS.")
-    cell_dim = max((b.dim for b in blocks), default=points.shape[1])
-    cell_sets = mesh.cell_sets or {}
+    meshes = list(meshes)
+    if mesh_names is None:
+        mesh_names = [f"Zone{i + 1}" for i in range(len(meshes))]
+    if len(mesh_names) != len(meshes):
+        raise WriteError("One name per mesh is needed.")
+    for mesh in meshes:
+        points = np.asarray(mesh.points)
+        if points.ndim != 2 or points.shape[1] not in (2, 3):
+            raise WriteError(f"CGNS points must be 2D or 3D, got {points.shape}.")
+        for block in mesh.cells:
+            if block.type not in _CODES and not block.type.startswith(
+                ("polygon", "polyhedron")
+            ):
+                raise WriteError(f"Cannot write {block.type} cells to CGNS.")
+    phys_dim = max((np.asarray(m.points).shape[1] for m in meshes), default=3)
+    cell_dim = max(
+        (b.dim for m in meshes for b in m.cells),
+        default=min((np.asarray(m.points).shape[1] for m in meshes), default=3),
+    )
 
     # the CGNS library lists the children of a node in creation order, so every
     # group, the root included, must track it
@@ -268,91 +284,108 @@ def write(filename, mesh, compression=None, compression_opts=None):
             " hdf5version", data=np.frombuffer(hdf5.ljust(33, b"\0"), np.int8)
         )
         w.node(f, "CGNSLibraryVersion", "CGNSLibraryVersion_t", np.float32([VERSION]))
-        base = w.node(f, "Base", "CGNSBase_t", np.int32([cell_dim, points.shape[1]]))
-        if len(points) == 0:
-            return  # a zone needs nodes: an empty mesh is a base without zone
+        base = w.node(f, "Base", "CGNSBase_t", np.int32([cell_dim, phys_dim]))
 
-        has_polyhedra = any(b.type.startswith("polyhedron") for b in blocks)
-        has_polygons = cell_dim == 2 and any(
-            b.type.startswith("polygon") for b in blocks
-        )
-        if has_polyhedra:
-            layout = _polyhedral_layout(blocks, cell_sets, cell_dim)
-        else:
-            layout = _standard_layout(blocks, cell_sets, cell_dim, has_polygons)
-        num_cells = layout.num_cells
-
-        zone = w.node(base, "Zone", "Zone_t", np.int64([[len(points), num_cells, 0]]))
-        w.node(zone, "ZoneType", "ZoneType_t", "Unstructured")
-        grid = w.node(zone, "GridCoordinates", "GridCoordinates_t")
-        for k, axis in enumerate("XYZ"[: points.shape[1]]):
-            w.node(grid, f"Coordinate{axis}", "DataArray_t", points[:, k].copy())
-
-        section_names = _Names()
-        family_names = _Names()
-        families = {}
-
-        def family(group):
-            if group not in families:
-                families[group] = family_names(group)
-            return families[group]
-
-        for sec in layout.sections:
-            node = w.node(
-                zone,
-                section_names(sec["name"]),
-                "Elements_t",
-                np.int32([sec["code"], 0]),
-            )
-            w.node(
-                node,
-                "ElementRange",
-                "IndexRange_t",
-                np.int64([sec["first"], sec["first"] + sec["count"] - 1]),
-            )
-            if "offsets" in sec:
-                w.node(
-                    node, "ElementStartOffset", "DataArray_t", _index(sec["offsets"])
+        families = _Families()
+        zone_names = _Names()
+        renamed = {}
+        for mesh, mesh_name in zip(meshes, mesh_names):
+            if len(mesh.points) == 0:
+                continue  # a zone needs nodes: an empty mesh writes no zone
+            renamed.update(
+                _write_zone(
+                    w, base, zone_names(mesh_name), mesh, cell_dim, phys_dim, families
                 )
-            w.node(node, "ElementConnectivity", "DataArray_t", _index(sec["conn"]))
-            for k, group in enumerate(sec.get("groups", ())):
-                label = "FamilyName_t" if k == 0 else "AdditionalFamilyName_t"
-                child = "FamilyName" if k == 0 else f"AdditionalFamilyName{k}"
-                w.node(node, child, label, family(group))
-
-        # groups of lower dimensional cells -> BCs
-        bc_names = _Names()
-        zone_bc = None
-        location = {1: "EdgeCenter", 2: "FaceCenter"}
-        for group, (dim, numbers) in layout.boundary_groups():
-            if zone_bc is None:
-                zone_bc = w.node(zone, "ZoneBC", "ZoneBC_t")
-            bc = w.node(zone_bc, bc_names(group), "BC_t", "FamilySpecified")
-            w.node(bc, "PointList", "IndexArray_t", _index(numbers)[None, :])
-            w.node(bc, "GridLocation", "GridLocation_t", location.get(dim, "Vertex"))
-            w.node(bc, "FamilyName", "FamilyName_t", family(group))
-
-        # groups of nodes -> ZoneSubRegion
-        region_names = _Names()
-        for group, nodes in (mesh.point_sets or {}).items():
-            nodes = np.asarray(nodes, dtype=np.int64)
-            if not len(nodes):
-                continue
-            region = w.node(zone, region_names(group), "ZoneSubRegion_t", np.int32([1]))
-            w.node(region, "GridLocation", "GridLocation_t", "Vertex")
-            w.node(region, "PointList", "IndexArray_t", _index(nodes + 1)[None, :])
-
-        for group, fam in families.items():
+            )
+        for fam in families.names.values():
             w.node(base, fam, "Family_t")
-
-        _write_solutions(w, zone, mesh, points, layout)
-
-        renamed = {**section_names.renamed, **family_names.renamed}
-        renamed.update(bc_names.renamed)
-        renamed.update(region_names.renamed)
+        renamed.update(zone_names.renamed)
+        renamed.update(families.names_.renamed)
         if renamed:
             items = ", ".join(f"{a!r} -> {b!r}" for a, b in list(renamed.items())[:5])
             warn(f"CGNS names are limited to {_MAX_NAME} characters: {items}...")
+
+
+class _Families:
+    """Family_t names of a base, shared by its zones."""
+
+    def __init__(self):
+        self.names = {}
+        self.names_ = _Names()
+
+    def __call__(self, group):
+        if group not in self.names:
+            self.names[group] = self.names_(group)
+        return self.names[group]
+
+
+def _write_zone(w, base, zone_name, mesh, cell_dim, phys_dim, family):
+    """Write one mesh as an unstructured zone; returns the renamed names."""
+    points = np.asarray(mesh.points, dtype=float)
+    if points.shape[1] < phys_dim:
+        points = np.column_stack(
+            [points, np.zeros((len(points), phys_dim - points.shape[1]))]
+        )
+    blocks = list(mesh.cells)
+    cell_sets = mesh.cell_sets or {}
+    has_polyhedra = any(b.type.startswith("polyhedron") for b in blocks)
+    has_polygons = cell_dim == 2 and any(b.type.startswith("polygon") for b in blocks)
+    if has_polyhedra:
+        layout = _polyhedral_layout(blocks, cell_sets, cell_dim)
+    else:
+        layout = _standard_layout(blocks, cell_sets, cell_dim, has_polygons)
+
+    zone = w.node(
+        base, zone_name, "Zone_t", np.int64([[len(points), layout.num_cells, 0]])
+    )
+    w.node(zone, "ZoneType", "ZoneType_t", "Unstructured")
+    grid = w.node(zone, "GridCoordinates", "GridCoordinates_t")
+    for k, axis in enumerate("XYZ"[:phys_dim]):
+        w.node(grid, f"Coordinate{axis}", "DataArray_t", points[:, k].copy())
+
+    section_names = _Names()
+    for sec in layout.sections:
+        node = w.node(
+            zone, section_names(sec["name"]), "Elements_t", np.int32([sec["code"], 0])
+        )
+        w.node(
+            node,
+            "ElementRange",
+            "IndexRange_t",
+            np.int64([sec["first"], sec["first"] + sec["count"] - 1]),
+        )
+        if "offsets" in sec:
+            w.node(node, "ElementStartOffset", "DataArray_t", _index(sec["offsets"]))
+        w.node(node, "ElementConnectivity", "DataArray_t", _index(sec["conn"]))
+        for k, group in enumerate(sec.get("groups", ())):
+            label = "FamilyName_t" if k == 0 else "AdditionalFamilyName_t"
+            child = "FamilyName" if k == 0 else f"AdditionalFamilyName{k}"
+            w.node(node, child, label, family(group))
+
+    # groups of lower dimensional cells -> BCs
+    bc_names = _Names()
+    zone_bc = None
+    location = {1: "EdgeCenter", 2: "FaceCenter"}
+    for group, (dim, numbers) in layout.boundary_groups():
+        if zone_bc is None:
+            zone_bc = w.node(zone, "ZoneBC", "ZoneBC_t")
+        bc = w.node(zone_bc, bc_names(group), "BC_t", "FamilySpecified")
+        w.node(bc, "PointList", "IndexArray_t", _index(numbers)[None, :])
+        w.node(bc, "GridLocation", "GridLocation_t", location.get(dim, "Vertex"))
+        w.node(bc, "FamilyName", "FamilyName_t", family(group))
+
+    # groups of nodes -> ZoneSubRegion
+    region_names = _Names()
+    for group, nodes in (mesh.point_sets or {}).items():
+        nodes = np.asarray(nodes, dtype=np.int64)
+        if not len(nodes):
+            continue
+        region = w.node(zone, region_names(group), "ZoneSubRegion_t", np.int32([1]))
+        w.node(region, "GridLocation", "GridLocation_t", "Vertex")
+        w.node(region, "PointList", "IndexArray_t", _index(nodes + 1)[None, :])
+
+    _write_solutions(w, zone, mesh, points, layout)
+    return {**section_names.renamed, **bc_names.renamed, **region_names.renamed}
 
 
 def _expand(name, values):

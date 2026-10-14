@@ -14,6 +14,7 @@ from .._common import warn
 from .._exceptions import ReadError
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
+from . import _structured as structured
 from ._elements import (
     MIXED,
     NFACE_n,
@@ -33,15 +34,19 @@ from ._write import write
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
-def read(filename):
-    import h5py
-
+def _check_hdf5(filename):
     with open(filename, "rb") as fh:
         if not fh.read(8).startswith(_HDF5_SIGNATURE):
             raise ReadError(
                 f"{filename} is not an HDF5 CGNS file (ADF files are not supported; "
                 "convert them with: cgnsconvert -h in.cgns out.cgns)."
             )
+
+
+def read(filename):
+    import h5py
+
+    _check_hdf5(filename)
     with h5py.File(filename, "r") as f:
         version = file_version(f)
         bases = children(f, "CGNSBase_t")
@@ -53,6 +58,32 @@ def read(filename):
             return _read_base(bases[0], version)
         except (KeyError, ValueError, IndexError) as e:
             raise ReadError(f"{filename}: invalid CGNS file: {e}") from e
+
+
+def read_multi(filename):
+    """Read every zone of every base as its own mesh.
+
+    Returns ``(meshes, names)``; names are the zone names, prefixed with the base
+    name when the file has several bases."""
+    import h5py
+
+    _check_hdf5(filename)
+    meshes, names = [], []
+    with h5py.File(filename, "r") as f:
+        version = file_version(f)
+        bases = children(f, "CGNSBase_t")
+        for base in bases:
+            phys_dim = int(np.ravel(data(base))[1])
+            for zone in children(base, "Zone_t"):
+                mesh = _Assembly()
+                try:
+                    _add_zone(mesh, zone, phys_dim, version)
+                except (KeyError, ValueError, IndexError) as e:
+                    raise ReadError(f"{filename}: invalid CGNS file: {e}") from e
+                meshes.append(mesh.mesh(multi_zone=False))
+                prefix = f"{name(base)}/" if len(bases) > 1 else ""
+                names.append(prefix + name(zone))
+    return meshes, names
 
 
 def _read_base(base, version):
@@ -69,19 +100,53 @@ def _read_base(base, version):
 
     mesh = _Assembly()
     for zone in zones:
-        zone_type = child(zone, "ZoneType_t")
-        zone_type = text(zone_type).strip() if zone_type is not None else "Unstructured"
-        if zone_type != "Unstructured":
-            raise ReadError(f"Zone {name(zone)}: {zone_type} zones are not supported.")
+        _add_zone(mesh, zone, phys_dim, version)
+    return mesh.mesh(multi_zone=len(zones) > 1)
+
+
+def _add_zone(mesh, zone, phys_dim, version):
+    zone_type = child(zone, "ZoneType_t")
+    zone_type = text(zone_type).strip("\x00 ") if zone_type is not None else ""
+    interface = None
+    if zone_type == "Structured":
+        points, blocks, groups, interface = _structured_zone(zone, phys_dim, version)
+    elif zone_type in ("Unstructured", ""):
         points = _coordinates(zone, phys_dim)
         groups = boundary_conditions(zone, version) + subregions(zone, version)
         keep = [v for _, kind, v in groups if kind == "elements"]
         keep = np.concatenate(keep) if keep else np.zeros(0, dtype=np.int64)
         blocks, section_groups = _zone_cells(zone, points, version, keep)
         groups += section_groups
-        groups += [(f, "zone", None) for f in family_names(zone, version)]
-        mesh.add_zone(name(zone), points, blocks, groups, zone_fields(zone, version))
-    return mesh.mesh(multi_zone=len(zones) > 1)
+    else:
+        raise ReadError(f"Zone {name(zone)}: unknown zone type {zone_type!r}.")
+    groups += [(f, "zone", None) for f in family_names(zone, version)]
+    fields = zone_fields(zone, version)
+    mesh.add_zone(name(zone), points, blocks, groups, fields, interface)
+
+
+def _structured_zone(zone, phys_dim, version):
+    """Points, blocks (cells, then generated BC faces), groups and interface
+    nodes of a structured zone; cells and faces get element numbers in that
+    order so that the groups go through the element path."""
+    points = structured.coordinates(zone, phys_dim)
+    block = structured.Block(zone, points)
+    faces, raw_groups = structured.zone_groups(block, version)
+    num_cells = len(block.cells)
+    blocks = [(block.cell_type, block.cells, np.arange(1, num_cells + 1))]
+    if faces:
+        faces = np.concatenate(faces)
+        face_type = "quad" if faces.shape[1] == 4 else "line"
+        numbers = num_cells + 1 + np.arange(len(faces))
+        blocks.append((face_type, faces, numbers))
+    groups = []
+    for group, kind, values in raw_groups:
+        if kind == "cells":
+            groups.append((group, "elements", values + 1))
+        elif kind == "faces":
+            groups.append((group, "elements", num_cells + 1 + values))
+        else:
+            groups.append((group, kind, values))
+    return points, blocks, groups, structured.interface_nodes(block)
 
 
 class _Assembly:
@@ -97,13 +162,16 @@ class _Assembly:
         self.zone_blocks = {}
         self.point_data = []  # per zone: {name: values}
         self.cell_data = {}  # name -> {block index: values}
+        self.interface = []  # nodes on 1-to-1 zone interfaces, to merge
 
     def _add_cells(self, set_name, block, local):
         if len(local):
             self.cell_sets.setdefault(set_name, {}).setdefault(block, []).append(local)
 
-    def add_zone(self, zone_name, points, blocks, groups, fields):
+    def add_zone(self, zone_name, points, blocks, groups, fields, interface=None):
         offset = self.num_points
+        if interface is not None and len(interface):
+            self.interface.append(interface - 1 + offset)
         first = len(self.blocks)
         for cell_type, conn, _ in blocks:
             self.blocks.append(CellBlock(cell_type, _shift(cell_type, conn, offset)))
@@ -235,7 +303,7 @@ class _Assembly:
             ]
             for f, per_block in self.cell_data.items()
         }
-        return Mesh(
+        mesh = Mesh(
             np.concatenate(self.points),
             self.blocks,
             point_data=point_data,
@@ -243,6 +311,37 @@ class _Assembly:
             point_sets=point_sets,
             cell_sets=cell_sets,
         )
+        if self.interface:
+            _merge_nodes(mesh, np.unique(np.concatenate(self.interface)))
+        return mesh
+
+
+def _merge_nodes(mesh, candidates):
+    """Merge the nodes among candidates that have the same coordinates (the two
+    sides of 1-to-1 zone interfaces), keeping the first one of each."""
+    coords = mesh.points[candidates]
+    _, first, inverse = np.unique(
+        coords, axis=0, return_index=True, return_inverse=True
+    )
+    target = candidates[first][inverse.ravel()]
+    if (target == candidates).all():
+        return
+    n = len(mesh.points)
+    new_index = np.arange(n)
+    new_index[candidates] = target
+    keep = new_index == np.arange(n)
+    compact = np.cumsum(keep) - 1
+    new_index = compact[new_index]
+    mesh.points = mesh.points[keep]
+    for block in mesh.cells:
+        if block.type.startswith("polyhedron"):
+            for cell in block.data:
+                for k, face in enumerate(cell):
+                    cell[k] = new_index[face]
+        else:
+            block.data = new_index[block.data]
+    mesh.point_sets = {k: np.unique(new_index[v]) for k, v in mesh.point_sets.items()}
+    mesh.point_data = {k: v[keep] for k, v in mesh.point_data.items()}
 
 
 def _time_step_zones(base):

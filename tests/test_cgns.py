@@ -39,7 +39,10 @@ def _enclosed_volume(points, faces):
 
 
 def _counts(mesh):
-    return {b.type: len(b.data) for b in mesh.cells}
+    out = {}
+    for b in mesh.cells:
+        out[b.type] = out.get(b.type, 0) + len(b.data)
+    return out
 
 
 # -- element types -------------------------------------------------------------
@@ -345,17 +348,6 @@ def test_read_adf_is_rejected(tmp_path):
     path = tmp_path / "mesh.cgns"
     path.write_bytes(b"@(#)ADF Database Version A02011>" + b"\0" * 100)
     with pytest.raises(meshlane.ReadError, match="cgnsconvert"):
-        meshlane.cgns.read(path)
-
-
-def test_read_structured_is_rejected(tmp_path):
-    path = tmp_path / "mesh.cgns"
-    with cg.new_file(path) as f:
-        zone = cg.node(
-            cg.base(f), "Block", "Zone_t", np.int64([[2, 2, 2], [1, 1, 1], [0, 0, 0]])
-        )
-        cg.node(zone, "ZoneType", "ZoneType_t", "Structured")
-    with pytest.raises(meshlane.ReadError, match="Structured"):
         meshlane.cgns.read(path)
 
 
@@ -714,3 +706,126 @@ def test_write_face_used_three_times(tmp_path):
     with h5py.File(path, "r") as f:
         ngon = f["Base/Zone/NGonElements/ElementRange/ data"][()]
     assert ngon.tolist() == [1, 7]
+
+
+# -- structured zones, several zones -------------------------------------------
+
+
+def _grid(x, y, z=None):
+    """Nodes of a structured block, shape (ni, nj[, nk], dim)."""
+    axes = (x, y) if z is None else (x, y, z)
+    return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+
+
+def test_read_structured(tmp_path):
+    # two blocks of 2 x 1 x 1 cells side by side, the right one left-handed
+    # (i decreasing), joined by a 1-to-1 interface on x = 2
+    left = _grid([0.0, 1.0, 2.0], [0.0, 1.0], [0.0, 1.0])
+    right = _grid([4.0, 3.0, 2.0], [0.0, 1.0], [0.0, 1.0])
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        base = cg.base(f)
+        for name, x, interface in (("left", left, 3), ("right", right, 3)):
+            zone = cg.structured_zone(base, x, name)
+            zgc = cg.node(zone, "ZoneGridConnectivity", "ZoneGridConnectivity_t")
+            other = "right" if name == "left" else "left"
+            conn = cg.point_range(
+                zgc,
+                "join",
+                "GridConnectivity1to1_t",
+                [interface, 1, 1],
+                [interface, 2, 2],
+                value=other,
+            )
+            cg.node(conn, "Transform", '"int[IndexDimension]"', np.int32([-1, 2, 3]))
+        zone_bc = cg.node(base["left"], "ZoneBC", "ZoneBC_t")
+        cg.point_range(zone_bc, "inlet", "BC_t", [1, 1, 1], [1, 2, 2])
+
+    mesh = meshlane.read(path)
+
+    assert _counts(mesh) == {"hexahedron": 4, "quad": 1}
+    assert len(mesh.points) == 2 * 12 - 4  # interface nodes merged
+    assert np.allclose(_volumes(mesh), 1.0)
+    assert sum(len(x) for x in mesh.cell_sets["inlet"]) == 1
+    assert len(mesh.point_sets["inlet"]) == 4
+    inlet = [b for b in mesh.cells if b.type == "quad"][0].data
+    assert np.allclose(mesh.points[inlet[0]][:, 0], 0.0)
+    # the boundary face points out of the domain (-x)
+    p = mesh.points[inlet[0]]
+    normal = np.cross(p[1] - p[0], p[2] - p[0])
+    assert normal[0] < 0
+    sets = {k: [len(x) for x in v] for k, v in mesh.cell_sets.items()}
+    assert sets["left"] == [2, 1, 0] and sets["right"] == [0, 0, 2]
+
+
+def test_read_structured_2d_fields(tmp_path):
+    x = _grid([0.0, 1.0, 2.0], [0.0, 1.0, 2.0])
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = cg.structured_zone(cg.base(f, cell_dim=2, phys_dim=2), x)
+        cg.point_range(
+            cg.node(zone, "ZoneBC", "ZoneBC_t"), "bottom", "BC_t", [1, 1], [3, 1]
+        )
+        # cell data with a rind cell on each side in i: (2 + 2) x 2 values
+        cells = np.array([[-1, 10, 11, -1], [-1, 12, 13, -1]], float).T
+        sol = cg.solution(zone, "Cells", {}, location="CellCenter", rind=[1, 1, 0, 0])
+        cg.node(sol, "T", "DataArray_t", cells)
+
+    mesh = meshlane.read(path)
+
+    assert _counts(mesh) == {"quad": 4, "line": 2}
+    quads = mesh.cells[0].data
+    p = mesh.points[quads]
+    area = 0.5 * np.sum(
+        p[..., 0] * np.roll(p[..., 1], -1, axis=1)
+        - np.roll(p[..., 0], -1, axis=1) * p[..., 1],
+        axis=1,
+    )
+    assert np.allclose(area, 1.0)
+    assert mesh.cell_data["T"][0].tolist() == [10, 11, 12, 13]
+    assert sum(len(x) for x in mesh.cell_sets["bottom"]) == 2
+
+
+def test_read_multi(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        base = cg.base(f)
+        cg.structured_zone(base, _grid([0.0, 1.0], [0.0, 1.0], [0.0, 1.0]), "box")
+        zone = cg.unstructured_zone(base, _POINTS, 2, name="hex_tet")
+        cg.section(zone, "Hex", 17, 1, _HEX, 1)
+        cg.section(zone, "Tet", 10, 2, _TET, 1)
+
+    meshes, names = meshlane.cgns.read_multi(path)
+
+    assert names == ["box", "hex_tet"]
+    assert [_counts(m) for m in meshes] == [
+        {"hexahedron": 1},
+        {"hexahedron": 1, "tetra": 1},
+    ]
+
+
+def test_write_multi(tmp_path):
+    a = meshlane.Mesh(
+        helpers.tet_mesh.points,
+        helpers.tet_mesh.cells,
+        cell_sets={"solid": [np.array([0, 1])]},
+    )
+    b = meshlane.Mesh(
+        helpers.hex_mesh.points + 2.0,
+        helpers.hex_mesh.cells,
+        cell_sets={"solid": [np.array([0])]},
+    )
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write_multi(path, [a, b], ["tets", "hex"])
+
+    with h5py.File(path, "r") as f:
+        families = [
+            k for k, g in f["Base"].items() if g.attrs.get("label") == b"Family_t"
+        ]
+    assert families == ["solid"]
+    meshes, names = meshlane.cgns.read_multi(path)
+    assert names == ["tets", "hex"]
+    assert [_counts(m) for m in meshes] == [{"tetra": 2}, {"hexahedron": 1}]
+    assert [sum(len(x) for x in m.cell_sets["solid"]) for m in meshes] == [2, 1]
+    merged = meshlane.read(path)
+    assert sum(len(x) for x in merged.cell_sets["solid"]) == 3

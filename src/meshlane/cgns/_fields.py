@@ -6,6 +6,7 @@ import numpy as np
 
 from .._common import warn
 from ._groups import location
+from ._structured import _strip_rind
 from ._tree import child, children, data, name, resolve
 
 
@@ -35,16 +36,17 @@ def zone_fields(zone, version):
     for solution in solutions:
         loc = location(solution, version)
         rind = solution.get("Rind")
-        before, after = (0, 0)
-        if rind is not None:
-            r = np.ravel(data(resolve(rind)))
-            before, after = int(r[0]), int(r[1]) if len(r) > 1 else 0
+        rind = None if rind is None else np.ravel(data(resolve(rind))).astype(int)
         for array in children(solution, "DataArray_t"):
             values = data(array)
             if values is None or values.dtype.kind not in "fiu":
                 continue
-            values = np.ravel(values).astype(float)
-            values = values[before : len(values) - after]
+            values = np.asarray(values, dtype=float)
+            if rind is not None and values.ndim > 1 and len(rind) == 2 * values.ndim:
+                values = _strip_rind(values, rind)  # structured: per direction
+            values = values.ravel()
+            if rind is not None and len(rind) == 2 and values.ndim == 1:
+                values = values[rind[0] : len(values) - rind[1]]
             entries.append((name(solution), name(array), loc, values))
     count = Counter(field for _, field, _, _ in entries)
     return [
