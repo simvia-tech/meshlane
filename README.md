@@ -53,6 +53,9 @@ and writes all of the following and converts smoothly between them:
 
 - **OpenFOAM polyMesh reader**: ASCII and binary, arbitrary cell types (tri / quad / polyhedra).
 - **Ansys/APDL** `.inp` / `.cdb` reader & writer for FEA interoperability.
+- **Ansys Fluent** `.msh` reader: rebuilds the volume cells from the faces (tetra,
+  pyramid, wedge, hexahedron, polyhedra; triangles, quads and polygons in 2D), ASCII
+  and binary, with the named zones as groups.
 - **MED/Salome improvements:**
   - multi-mesh files (several meshes in one `.med`)
   - polygon cell support, including ragged/Voronoi meshes
