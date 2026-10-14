@@ -5,3 +5,4 @@ Copyright (c) 2020 - 2026 Synopsys, Inc. and ANSYS, Inc.):
 - `solid.msh`: `pyfluent/solidification/solid.msh`
 - `disk.msh`: `pyfluent/rotating_disk/disk.msh.gz` (decompressed)
 - `flap.msh`: `pyfluent/fsi_2way/flap.msh`
+- `simple-duct.msh.h5`: `pyfluent/simple_duct/simple-duct.msh.h5`

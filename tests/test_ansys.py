@@ -390,3 +390,120 @@ def test_read_gmsh_msh_still_works():
         pathlib.Path(__file__).resolve().parent / "meshes" / "msh" / "insulated-2.2.msh"
     )
     assert len(mesh.points) > 0
+
+
+# -- Fluent HDF5 meshes (.msh.h5) ----------------------------------------------
+
+
+def _write_fluent_h5(path, points, num_cells, zones):
+    """Write a Fluent .msh.h5 file. zones as for _write_fluent."""
+    h5py = pytest.importorskip("h5py")
+    with h5py.File(path, "w") as f:
+        m = f.create_group("meshes/1")
+        m.attrs["dimension"] = [points.shape[1]]
+        m.attrs["cellCount"] = [num_cells]
+        m.attrs["faceOffset"] = [0]
+        coords = m.create_dataset("nodes/coords/1", data=points)
+        coords.attrs["minId"] = [1]
+        coords.attrs["maxId"] = [len(points)]
+        cz = m.create_group("cells/zoneTopology")
+        cz["id"] = [2]
+        cz["minId"] = np.array([1], dtype=np.uint64)
+        cz["maxId"] = np.array([num_cells], dtype=np.uint64)
+        cz["name"] = [b"fluid"]
+        first = 1
+        rows = {"id": [], "minId": [], "maxId": [], "zoneType": [], "name": []}
+        for k, (zone, bc, name, faces) in enumerate(zones, start=1):
+            last = first + len(faces) - 1
+            for group in ("faces/nodes", "faces/c0", "faces/c1"):
+                m.require_group(group)
+            g = m["faces/nodes"].create_group(str(k))
+            g["nnodes"] = np.array([len(f[0]) for f in faces], dtype=np.int16)
+            g["nodes"] = np.array([n + 1 for f in faces for n in f[0]], dtype=np.uint32)
+            c0 = m["faces/c0"].create_dataset(str(k), data=[f[1] for f in faces])
+            c1 = m["faces/c1"].create_dataset(str(k), data=[f[2] for f in faces])
+            for obj in (g, c0, c1):
+                obj.attrs["minId"] = [first]
+                obj.attrs["maxId"] = [last]
+            rows["id"].append(zone)
+            rows["minId"].append(first)
+            rows["maxId"].append(last)
+            rows["zoneType"].append(bc)
+            rows["name"].append(name)
+            first = last + 1
+        fz = m.create_group("faces/zoneTopology")
+        for key in ("id", "zoneType"):
+            fz[key] = np.array(rows[key], dtype=np.int32)
+        for key in ("minId", "maxId"):
+            fz[key] = np.array(rows[key], dtype=np.uint64)
+        fz["name"] = [";".join(rows["name"]).encode()]
+
+
+def test_read_fluent_h5_cells(tmp_path):
+    faces = _faces_of(_CELLS_3D)
+    interior, inlet, walls = _split_boundary(
+        faces, lambda f: all(_POINTS_3D[n][2] == 0.0 for n in f[0])
+    )
+    zones = [
+        (3, 2, "default-interior", interior),
+        (4, 10, "inlet", inlet),
+        (5, 3, "walls", walls),
+    ]
+    path = tmp_path / "mesh.msh.h5"
+    _write_fluent_h5(path, _POINTS_3D, len(_CELLS_3D), zones)
+
+    mesh = meshlane.read(path)
+
+    counts = {b.type: len(b.data) for b in mesh.cells}
+    assert counts == {
+        "tetra": 1,
+        "pyramid": 1,
+        "wedge": 1,
+        "hexahedron": 1,
+        "triangle": 8,
+        "quad": 6,
+    }
+    volumes = _volumes(mesh)
+    assert (volumes > 0).all()
+    assert np.isclose(
+        _enclosed_volume(mesh.points, _boundary_faces(mesh)), volumes.sum()
+    )
+    sets = {k: sum(len(s) for s in v) for k, v in mesh.cell_sets.items()}
+    assert sets == {"fluid": 4, "inlet": 1, "walls": 13}
+
+
+def test_read_fluent_h5_polyhedron(tmp_path):
+    hexa = [[[0, 1, 2, 3, 4, 5, 6, 7][i] for i in f] for f in _OUTWARD["hexahedron"]]
+    faces = [f for f in hexa if f != [4, 5, 6, 7]] + [[4, 5, 6], [4, 6, 7]]
+    path = tmp_path / "mesh.msh.h5"
+    _write_fluent_h5(
+        path, _POINTS_3D[:8], 1, [(3, 3, "walls", [[f, 1, 0] for f in faces])]
+    )
+
+    mesh = meshlane.read(path)
+
+    assert [b.type for b in mesh.cells] == ["polyhedron8", "triangle", "quad"]
+    assert np.isclose(_volumes(mesh), [1.0]).all()
+
+
+def test_read_fluent_h5_file():
+    pytest.importorskip("h5py")
+    mesh = meshlane.read(MESH_DIR / "simple-duct.msh.h5")
+
+    assert {b.type: len(b.data) for b in mesh.cells} == {"hexahedron": 10, "quad": 42}
+    volumes = _volumes(mesh)
+    assert (volumes > 0).all()
+    assert np.isclose(volumes.sum(), 10.0)
+    sets = {k: sum(len(s) for s in v) for k, v in mesh.cell_sets.items()}
+    assert sets == {"fluid": 10, "outflow": 1, "inlet": 1, "symm": 40}
+
+
+def test_read_fluent_h5_with_msh_extension(tmp_path):
+    # Fluent HDF5 meshes are sometimes saved as plain .msh
+    pytest.importorskip("h5py")
+    path = tmp_path / "mesh.msh"
+    path.write_bytes((MESH_DIR / "simple-duct.msh.h5").read_bytes())
+
+    mesh = meshlane.read(path)
+
+    assert {b.type: len(b.data) for b in mesh.cells} == {"hexahedron": 10, "quad": 42}

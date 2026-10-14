@@ -4,6 +4,7 @@
 *.e
 *.geo
 *.h5
+!tests/meshes/ansys/*.msh.h5
 *.h5m
 *.off
 *.pvtu

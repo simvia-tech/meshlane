@@ -109,16 +109,118 @@ def _split_faces(ints, num_faces, face_type):
     return ptr, ints[idx], ints[starts + sizes], ints[starts + sizes + 1]
 
 
-class _Parser:
-    def __init__(self, buf):
-        self.buf = buf
-        self.dim = 3  # until a (2 dim) section says otherwise
+class _FluentMesh:
+    """The content of a Fluent mesh, as read from a .msh or a .msh.h5 file, with
+    1-based node and cell indices (0: no cell)."""
+
+    def __init__(self):
+        self.dim = 3
         self.nodes = []  # (first node index, points)
         self.num_cells = 0
         self.cell_zones = []  # (zone id, first cell index, last cell index)
         self.listed_cells = []  # (cell type, nodes), cells listed in section 12
         self.face_zones = []  # (zone id, bc type, ptr, nodes, c0, c1)
-        self.zones = {}  # zone id -> (zone type, name), from sections 39/45
+        self.zones = {}  # zone id -> (zone type, name)
+
+    def _zone_name(self, zone):
+        return self.zones[zone][1] if zone in self.zones else f"zone{zone}"
+
+    def mesh(self):
+        if self.nodes:
+            offset = min(first for first, _ in self.nodes)
+            num_points = max(first + len(p) for first, p in self.nodes) - offset
+            points = np.zeros((num_points, self.nodes[0][1].shape[1]))
+            for first, p in self.nodes:
+                points[first - offset : first - offset + len(p)] = p
+        else:
+            offset = 1
+            points = np.zeros((0, self.dim))
+
+        if not self.face_zones:
+            cells = [(t, nodes - offset) for t, nodes in self.listed_cells]
+            return Mesh(points, cells)
+
+        zones = [z for z in self.face_zones if z[1] != _BC_PARENT]
+        sizes = [len(z[4]) for z in zones]
+        ptr = [np.array([0])]
+        shift = 0
+        for z in zones:
+            ptr.append(z[2][1:] + shift)
+            shift += z[2][-1]
+        face_nodes = np.concatenate([z[3] for z in zones])
+        face_nodes -= offset
+        c0 = np.concatenate([z[4] for z in zones])
+        c0 -= 1
+        c1 = np.concatenate([z[5] for z in zones])
+        c1 -= 1
+        faces = Faces(np.concatenate(ptr), face_nodes, c0, c1)
+        face_zone = np.repeat([z[0] for z in zones], sizes)
+        face_bc = np.repeat([z[1] for z in zones], sizes)
+        # the per-zone arrays are copied in faces: free them (large meshes)
+        del zones, face_nodes, c0, c1
+        self.face_zones = []
+        if len(faces.nodes) and (
+            faces.nodes.min() < 0 or faces.nodes.max() >= len(points)
+        ):
+            raise ReadError("Face node index out of range.")
+        num_cells = max(
+            self.num_cells,
+            int(faces.c0.max(initial=-1)) + 1,
+            int(faces.c1.max(initial=-1)) + 1,
+        )
+
+        blocks, out_of_c0 = build_cells(points, faces, num_cells)
+
+        # boundary faces, oriented out of the domain
+        num_volume = len(blocks)
+        boundary = np.flatnonzero(face_bc != _BC_INTERIOR)
+        # (faces without cells, as in surface meshes, keep their node order)
+        has_c0 = faces.c0[boundary] >= 0
+        has_c1 = faces.c1[boundary] >= 0
+        reverse = np.where(has_c0, not out_of_c0, has_c1 & out_of_c0)
+        size = faces.size[boundary]
+        for k in np.unique(size):
+            sel = size == k
+            f = boundary[sel]
+            nodes = faces.nodes[faces.ptr[f][:, None] + np.arange(k)]
+            nodes = np.where(reverse[sel][:, None], nodes[:, ::-1], nodes)
+            kind = {2: "line", 3: "triangle", 4: "quad"}.get(k, f"polygon{k}")
+            blocks.append((kind, nodes, f))
+
+        # zones -> cell_sets; volume blocks hold cell ids, face blocks face ids
+        cell_sets = {}
+        for zone, first, last in self.cell_zones:
+            name = self._zone_name(zone)
+            cell_sets[name] = [
+                (
+                    np.flatnonzero((ids >= first - 1) & (ids <= last - 1))
+                    if i < num_volume
+                    else np.array([], dtype=int)
+                )
+                for i, (_, _, ids) in enumerate(blocks)
+            ]
+        for zone in np.unique(face_zone[boundary]):
+            name = self._zone_name(int(zone))
+            cell_sets[name] = [
+                (
+                    np.flatnonzero(face_zone[ids] == zone)
+                    if i >= num_volume
+                    else np.array([], dtype=int)
+                )
+                for i, (_, _, ids) in enumerate(blocks)
+            ]
+        cell_sets = {
+            name: sets for name, sets in cell_sets.items() if any(len(s) for s in sets)
+        }
+
+        cells = [CellBlock(kind, data) for kind, data, _ in blocks]
+        return Mesh(points, cells, cell_sets=cell_sets)
+
+
+class _Parser(_FluentMesh):
+    def __init__(self, buf):
+        super().__init__()
+        self.buf = buf
         # meshlane and meshio write a newline between "(" and binary data
         self.written_by_meshlane = False
 
@@ -309,100 +411,18 @@ class _Parser:
             self.zones[zone] = (tokens[1].decode(), tokens[2].decode())
         return _close(self.buf, pos)
 
-    # -- mesh -------------------------------------------------------------------
 
-    def _zone_name(self, zone):
-        return self.zones[zone][1] if zone in self.zones else f"zone{zone}"
-
-    def mesh(self):
-        if self.nodes:
-            offset = min(first for first, _ in self.nodes)
-            num_points = max(first + len(p) for first, p in self.nodes) - offset
-            points = np.zeros((num_points, self.nodes[0][1].shape[1]))
-            for first, p in self.nodes:
-                points[first - offset : first - offset + len(p)] = p
-        else:
-            offset = 1
-            points = np.zeros((0, self.dim))
-
-        if not self.face_zones:
-            cells = [(t, nodes - offset) for t, nodes in self.listed_cells]
-            return Mesh(points, cells)
-
-        zones = [z for z in self.face_zones if z[1] != _BC_PARENT]
-        sizes = [len(z[4]) for z in zones]
-        ptr = [np.array([0])]
-        shift = 0
-        for z in zones:
-            ptr.append(z[2][1:] + shift)
-            shift += z[2][-1]
-        faces = Faces(
-            np.concatenate(ptr),
-            np.concatenate([z[3] for z in zones]) - offset,
-            np.concatenate([z[4] for z in zones]) - 1,
-            np.concatenate([z[5] for z in zones]) - 1,
-        )
-        face_zone = np.repeat([z[0] for z in zones], sizes)
-        face_bc = np.repeat([z[1] for z in zones], sizes)
-        if len(faces.nodes) and (
-            faces.nodes.min() < 0 or faces.nodes.max() >= len(points)
-        ):
-            raise ReadError("Face node index out of range.")
-        num_cells = max(
-            self.num_cells,
-            int(faces.c0.max(initial=-1)) + 1,
-            int(faces.c1.max(initial=-1)) + 1,
-        )
-
-        blocks, out_of_c0 = build_cells(points, faces, num_cells)
-
-        # boundary faces, oriented out of the domain
-        num_volume = len(blocks)
-        boundary = np.flatnonzero(face_bc != _BC_INTERIOR)
-        side_is_c0 = faces.c0[boundary] >= 0
-        reverse = np.where(side_is_c0, not out_of_c0, out_of_c0)
-        size = faces.size[boundary]
-        for k in np.unique(size):
-            sel = size == k
-            f = boundary[sel]
-            nodes = faces.nodes[faces.ptr[f][:, None] + np.arange(k)]
-            nodes = np.where(reverse[sel][:, None], nodes[:, ::-1], nodes)
-            kind = {2: "line", 3: "triangle", 4: "quad"}.get(k, f"polygon{k}")
-            blocks.append((kind, nodes, f))
-
-        # zones -> cell_sets; volume blocks hold cell ids, face blocks face ids
-        cell_sets = {}
-        for zone, first, last in self.cell_zones:
-            name = self._zone_name(zone)
-            cell_sets[name] = [
-                (
-                    np.flatnonzero((ids >= first - 1) & (ids <= last - 1))
-                    if i < num_volume
-                    else np.array([], dtype=int)
-                )
-                for i, (_, _, ids) in enumerate(blocks)
-            ]
-        for zone in np.unique(face_zone[boundary]):
-            name = self._zone_name(int(zone))
-            cell_sets[name] = [
-                (
-                    np.flatnonzero(face_zone[ids] == zone)
-                    if i >= num_volume
-                    else np.array([], dtype=int)
-                )
-                for i, (_, _, ids) in enumerate(blocks)
-            ]
-        cell_sets = {
-            name: sets for name, sets in cell_sets.items() if any(len(s) for s in sets)
-        }
-
-        cells = [CellBlock(kind, data) for kind, data, _ in blocks]
-        return Mesh(points, cells, cell_sets=cell_sets)
+_HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
 
 def read(filename):
     with open_file(filename, "rb") as f:
         head = f.read(1024)
+        if head.startswith(_HDF5_SIGNATURE):
+            # Fluent HDF5 mesh saved with a plain .msh extension
+            from ._ansys_h5 import read as read_h5
+
+            return read_h5(filename)
         # Fluent files start with a section; fail fast on other .msh files
         if not head.lstrip().startswith(b"("):
             raise ReadError("Not a Fluent mesh file.")

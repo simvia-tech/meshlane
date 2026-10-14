@@ -34,6 +34,15 @@ class Faces:
     def __len__(self):
         return len(self.c0)
 
+    def subset(self, idx):
+        """The faces idx, as a new Faces."""
+        size = self.size[idx]
+        ptr = np.concatenate([[0], np.cumsum(size)])
+        nodes = self.nodes[
+            np.repeat(self.ptr[idx] - ptr[:-1], size) + np.arange(ptr[-1])
+        ]
+        return Faces(ptr, nodes, self.c0[idx], self.c1[idx])
+
 
 def _face_centers_normals(points, faces):
     """Center and (unnormalized) normal of each face. In 2D a face is a segment
@@ -53,12 +62,20 @@ def _face_centers_normals(points, faces):
     return centers, normals
 
 
-def stored_normal_points_out_of_c0(points, faces, n_cells):
+def stored_normal_points_out_of_c0(points, faces, n_cells, sample=50_000):
     """Whether the right-hand normal of the stored node order points away from c0.
 
     Fluent writers agree on one convention per file, but it is easy to get wrong,
     so it is measured: each face votes by comparing its normal with the direction
-    from the center of c0 to the face center."""
+    from the center of c0 to the face center. Only the faces of the first
+    ``sample`` cells vote, which is plenty and keeps large meshes cheap."""
+    if n_cells > sample:
+        c0, c1 = faces.c0, faces.c1
+        near = ((c0 >= 0) & (c0 < sample)) | ((c1 >= 0) & (c1 < sample))
+        faces = faces.subset(np.flatnonzero(near))
+        faces.c0 = np.where(faces.c0 < sample, faces.c0, -1)
+        faces.c1 = np.where(faces.c1 < sample, faces.c1, -1)
+        n_cells = sample
     centers, normals = _face_centers_normals(points, faces)
     cells = np.concatenate([faces.c0, faces.c1])
     fc = np.concatenate([centers, centers])
@@ -216,6 +233,71 @@ def _chain_one(faces):
     return loop
 
 
+def _polyhedra(cf, cells):
+    """``polyhedron<N>`` blocks (each cell: list of outward faces, N: its number of
+    nodes) for the given cells.
+
+    Polyhedral meshes can have millions of cells, so the outward node lists of all
+    their faces are gathered at once in one array, each face being a view of it,
+    and the temporary index arrays are kept small (32-bit when possible, updated
+    in place).
+    """
+    if len(cells) == 0:
+        return []
+    faces = cf.faces
+    num = cf.num[cells]
+    cell_ptr = np.concatenate([[0], np.cumsum(num)])
+    h = np.repeat(cf.offset[cells] - cell_ptr[:-1], num) + np.arange(cell_ptr[-1])
+    f = cf.face[h]
+    size = faces.size[f]
+    face_ptr = np.concatenate([[0], np.cumsum(size)])
+    total = int(face_ptr[-1])
+    index = np.int32 if max(total, len(faces.nodes)) < 2**31 else np.int64
+
+    # position in faces.nodes of each node of each outward face
+    within = np.arange(total, dtype=index)
+    within -= np.repeat(face_ptr[:-1].astype(index), size)
+    reverse = np.repeat(cf.rev[h], size)
+    flipped = np.repeat((size - 1).astype(index), size)
+    np.subtract(flipped, within, out=flipped)
+    np.copyto(within, flipped, where=reverse)
+    del flipped, reverse
+    within += np.repeat(faces.ptr[f].astype(index), size)
+    nodes = faces.nodes[within]
+    del within
+    flat = nodes.astype(index) if nodes.max(initial=0) < 2**31 else nodes
+    del nodes
+
+    # number of distinct nodes of each cell
+    base = int(flat.max(initial=0)) + 1
+    key = np.repeat(np.repeat(np.arange(len(cells), dtype=np.int64), num), size)
+    key *= base
+    key += flat
+    key.sort()
+    first = np.empty(len(key), dtype=bool)
+    if len(key):
+        first[0] = True
+        np.not_equal(key[1:], key[:-1], out=first[1:])
+    num_nodes = np.bincount(key[first] // base, minlength=len(cells))
+    del key, first
+
+    # one view per face, made by chunks to avoid a huge list of Python ints
+    views = []
+    chunk = 1 << 20
+    for a in range(0, len(f), chunk):
+        p = face_ptr[a : a + chunk + 1].tolist()
+        views.extend(flat[p[k] : p[k + 1]] for k in range(len(p) - 1))
+    cp = cell_ptr.tolist()
+    blocks = []
+    for n in np.unique(num_nodes):
+        sel = np.flatnonzero(num_nodes == n)
+        data = np.empty(len(sel), dtype=object)
+        for i, c in enumerate(sel.tolist()):
+            data[i] = views[cp[c] : cp[c + 1]]
+        blocks.append((f"polyhedron{n}", data, cells[sel]))
+    return blocks
+
+
 def build_cells(points, faces, n_cells):
     """Rebuild the cells from their faces.
 
@@ -249,19 +331,7 @@ def build_cells(points, faces, n_cells):
         for mask in kinds.values():
             regular |= mask
         leftover.append(np.flatnonzero(~regular & (num >= 4)))
-        polys = np.sort(np.concatenate(leftover))
-        by_n = defaultdict(list)
-        for c in polys:
-            outward = cf.outward(c)
-            n_nodes = len(np.unique(np.concatenate(outward)))
-            by_n[n_nodes].append((c, outward))
-        for n_nodes in sorted(by_n):
-            items = by_n[n_nodes]
-            data = np.empty(len(items), dtype=object)
-            for i, (_, outward) in enumerate(items):
-                data[i] = outward
-            ids = np.array([c for c, _ in items], dtype=int)
-            blocks.append((f"polyhedron{n_nodes}", data, ids))
+        blocks.extend(_polyhedra(cf, np.sort(np.concatenate(leftover))))
         skipped = int(np.count_nonzero((num > 0) & (num < 4)))
     else:
         for kind, m in (("triangle", 3), ("quad", 4)):
