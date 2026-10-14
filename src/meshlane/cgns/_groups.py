@@ -39,7 +39,8 @@ def family_names(node, version):
         # until CGNS 1.2, the family name was the name of the FamilyName_t node
         names.append(name(family) if version <= 1200 else _string(family))
     names += [_string(extra) for extra in children(node, "AdditionalFamilyName_t")]
-    return [n for n in names if n]
+    # CGNS 4 may give a family as a path in a family tree: /Base/Family
+    return [n.rstrip("/").rsplit("/", 1)[-1] for n in names if n.strip("/")]
 
 
 def _point_set(node):
@@ -76,4 +77,19 @@ def boundary_conditions(zone, version):
         group = name(bc) or next(iter(family_names(bc, version)), "")
         if group:
             out.append((group, "elements" if is_elements else "points", values))
+    return out
+
+
+def subregions(zone, version):
+    """``[(name, kind, values)]`` for the ZoneSubRegion_t nodes of a zone that list
+    nodes ("region points": point sets only) or elements."""
+    out = []
+    for region in children(zone, "ZoneSubRegion_t"):
+        key, values = _point_set(region)
+        if values is None:
+            continue
+        is_elements = key.startswith("Element") or location(region, version) != "Vertex"
+        out.append(
+            (name(region), "elements" if is_elements else "region points", values)
+        )
     return out

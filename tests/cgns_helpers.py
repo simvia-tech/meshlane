@@ -12,7 +12,7 @@ import numpy as np
 def new_file(path, version=4.4):
     import h5py
 
-    f = h5py.File(path, "w")
+    f = h5py.File(path, "w", track_order=True)
     f.attrs.create("name", np.bytes_("HDF5 MotherNode"), dtype="S33")
     f.attrs.create("label", np.bytes_("Root Node of HDF5 File"), dtype="S33")
     f.attrs.create("type", np.bytes_("MT"), dtype="S3")

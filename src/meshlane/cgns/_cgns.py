@@ -25,9 +25,10 @@ from ._elements import (
     to_meshlane,
 )
 from ._fields import zone_fields
-from ._groups import boundary_conditions, family_names
+from ._groups import boundary_conditions, family_names, subregions
 from ._polyhedra import build_cells
 from ._tree import child, children, data, file_version, name, resolve, text
+from ._write import write
 
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 
@@ -58,7 +59,7 @@ def _read_base(base, version):
     phys_dim = int(np.ravel(data(base))[1])
     zones = children(base, "Zone_t")
     if not zones:
-        raise ReadError(f"Base {name(base)} has no zone.")
+        return Mesh(np.zeros((0, phys_dim)), [])
     steps = _time_step_zones(base)
     first_step = [z for z in zones if steps is not None and name(z) in steps]
     if first_step:
@@ -73,7 +74,7 @@ def _read_base(base, version):
         if zone_type != "Unstructured":
             raise ReadError(f"Zone {name(zone)}: {zone_type} zones are not supported.")
         points = _coordinates(zone, phys_dim)
-        groups = boundary_conditions(zone, version)
+        groups = boundary_conditions(zone, version) + subregions(zone, version)
         keep = [v for _, kind, v in groups if kind == "elements"]
         keep = np.concatenate(keep) if keep else np.zeros(0, dtype=np.int64)
         blocks, section_groups = _zone_cells(zone, points, version, keep)
@@ -143,6 +144,8 @@ class _Assembly:
             else:
                 nodes = values - 1
                 self.point_sets.setdefault(group, []).append(nodes + offset)
+                if kind == "region points":
+                    continue
                 # the boundary faces made of these nodes
                 in_group = np.zeros(len(points), dtype=bool)
                 in_group[nodes] = True
@@ -406,64 +409,6 @@ def _face_blocks(face_ptr, face_nodes, faces, reverse, face_numbers):
         cell_type = {2: "line", 3: "triangle", 4: "quad"}.get(k, f"polygon{k}")
         blocks.append((cell_type, nodes, face_numbers[sel]))
     return blocks
-
-
-def write(filename, mesh, compression="gzip", compression_opts=4):
-    import h5py
-
-    f = h5py.File(filename, "w")
-
-    base = f.create_group("Base")
-
-    # TODO something is missing here
-
-    zone1 = base.create_group("Zone1")
-    coords = zone1.create_group("GridCoordinates")
-
-    # write points
-    coord_x = coords.create_group("CoordinateX")
-    coord_x.create_dataset(
-        " data",
-        data=mesh.points[:, 0],
-        compression=compression,
-        compression_opts=compression_opts,
-    )
-    coord_y = coords.create_group("CoordinateY")
-    coord_y.create_dataset(
-        " data",
-        data=mesh.points[:, 1],
-        compression=compression,
-        compression_opts=compression_opts,
-    )
-    coord_z = coords.create_group("CoordinateZ")
-    coord_z.create_dataset(
-        " data",
-        data=mesh.points[:, 2],
-        compression=compression,
-        compression_opts=compression_opts,
-    )
-
-    # write cells
-    # TODO write cells other than tetra
-    elems = zone1.create_group("GridElements")
-    rnge = elems.create_group("ElementRange")
-    for cell_block in mesh.cells:
-        if cell_block.type == "tetra":
-            rnge.create_dataset(
-                " data",
-                data=[1, cell_block.data.shape[0]],
-                compression=compression,
-                compression_opts=compression_opts,
-            )
-    conn = elems.create_group("ElementConnectivity")
-    for cell_block in mesh.cells:
-        if cell_block.type == "tetra":
-            conn.create_dataset(
-                " data",
-                data=cell_block.data.reshape(-1) + 1,
-                compression=compression,
-                compression_opts=compression_opts,
-            )
 
 
 register_format("cgns", [".cgns"], read, {"cgns": write})

@@ -8,6 +8,7 @@ from meshlane.med._med import _reorder_med_cells
 from meshlane.med._orient import _signed_volume
 
 from . import cgns_helpers as cg
+from . import helpers
 
 h5py = pytest.importorskip("h5py")
 
@@ -527,3 +528,189 @@ def test_read_cgns_library_groups():
     sizes = {k: sum(len(x) for x in v) for k, v in mesh.cell_sets.items()}
     assert sizes == {"Ilo": 128, "Ihi": 128, "Walls": 960}
     assert sorted(mesh.point_data) == ["Density", "Pressure"]
+
+
+# -- writer --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mesh",
+    [
+        helpers.empty_mesh,
+        helpers.tri_mesh,
+        helpers.tri_mesh_2d,
+        helpers.quad_mesh,
+        helpers.quad_tri_mesh,
+        helpers.tet_mesh,
+        helpers.hex_mesh,
+        helpers.wedge_mesh,
+        helpers.pyramid_mesh,
+        helpers.tet10_mesh,
+        helpers.hex20_mesh,
+        helpers.triangle6_mesh,
+        helpers.quad8_mesh,
+        helpers.add_point_data(helpers.tet_mesh, 1),
+        helpers.add_cell_data(helpers.hex_mesh, [("a", (), np.float64)]),
+    ],
+)
+def test_write_read(mesh, tmp_path):
+    helpers.write_read(
+        tmp_path, meshlane.cgns.write, meshlane.cgns.read, mesh, 1.0e-15, ".cgns"
+    )
+
+
+def _string_attr(obj, key):
+    tid = obj.attrs.get_id(key).get_type()
+    return tid.get_size(), tid.get_strpad()
+
+
+def test_write_layout(tmp_path):
+    # the CGNS library lists children in creation order and reads null-terminated
+    # strings: without these, it sees no base in the file
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, helpers.tet_mesh)
+
+    with h5py.File(path, "r") as f:
+        assert f["/"].id.get_create_plist().get_link_creation_order() != 0
+        assert _string_attr(f, "label") == (33, h5py.h5t.STR_NULLTERM)
+        assert list(f) == [" format", " hdf5version", "CGNSLibraryVersion", "Base"]
+        base = f["Base"]
+        assert base.attrs["label"] == b"CGNSBase_t"
+        assert base[" data"][()].tolist() == [3, 3]
+        zone = base["Zone"]
+        assert _string_attr(zone, "type") == (3, h5py.h5t.STR_NULLTERM)
+        assert zone[" data"].shape == (3, 1)
+        assert zone[" data"][()].ravel().tolist() == [5, 2, 0]
+        section = next(
+            g
+            for g in zone.values()
+            if isinstance(g, h5py.Group) and g.attrs["label"] == b"Elements_t"
+        )
+        assert section[" data"].dtype == np.int32  # required by the library
+        assert section[" data"][()].tolist() == [10, 0]
+
+
+def test_write_groups(tmp_path):
+    mesh = meshlane.Mesh(
+        _POINTS - 0.5,
+        [
+            ("hexahedron", [np.array(_HEX) - 1]),
+            ("tetra", [np.array(_TET) - 1]),
+            ("quad", [np.array(_QUAD) - 1]),
+            ("triangle", [np.array(_TRI) - 1]),
+        ],
+        point_sets={"apex": np.array([8])},
+        cell_sets={
+            "fluid": [
+                np.array([0]),
+                np.array([0]),
+                np.array([], int),
+                np.array([], int),
+            ],
+            "tip": [np.array([], int), np.array([0]), np.array([], int), np.array([0])],
+            "bottom": [
+                np.array([], int),
+                np.array([], int),
+                np.array([0]),
+                np.array([], int),
+            ],
+        },
+    )
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, mesh)
+
+    with h5py.File(path, "r") as f:
+        families = sorted(
+            k for k, g in f["Base"].items() if g.attrs.get("label") == b"Family_t"
+        )
+        bcs = sorted(f["Base/Zone/ZoneBC"])
+    assert families == ["bottom", "fluid", "tip"]
+    assert bcs == ["bottom", "tip"]
+
+    out = meshlane.read(path)
+    assert [b.type for b in out.cells] == ["hexahedron", "tetra", "quad", "triangle"]
+    sizes = {k: sum(len(x) for x in v) for k, v in out.cell_sets.items()}
+    assert sizes == {"fluid": 2, "tip": 2, "bottom": 1}
+    assert out.point_sets["apex"].tolist() == [8]
+    assert (_volumes(out) > 0).all()
+
+
+def test_write_polyhedra(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, helpers.polyhedron_mesh)
+
+    with h5py.File(path, "r") as f:
+        zone = f["Base/Zone"]
+        codes = sorted(
+            int(g[" data"][0])
+            for g in zone.values()
+            if g.attrs.get("label") == b"Elements_t"
+        )
+    assert codes == [22, 23]  # NGON_n, NFACE_n
+
+    out = meshlane.read(path)
+    volume = {b.type: len(b.data) for b in out.cells if b.dim == 3}
+    assert volume == {"tetra": 2, "pyramid": 1, "polyhedron5": 1}
+    assert (_volumes(out) > 0).all()
+    # the shared faces are written once: the boundary has 11 faces
+    assert sum(len(b.data) for b in out.cells if b.dim == 2) == 11
+
+
+def test_write_polygons_2d(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, helpers.polygon_mesh)
+
+    out = meshlane.read(path)
+    assert {b.type: len(b.data) for b in out.cells} == {
+        "triangle": 2,
+        "quad": 1,
+        "polygon5": 1,
+        "polygon6": 2,
+    }
+
+
+def test_write_long_names_and_vectors(tmp_path):
+    mesh = meshlane.Mesh(
+        helpers.tet_mesh.points,
+        helpers.tet_mesh.cells,
+        point_data={"velocity": np.ones((5, 3))},
+        cell_sets={"a" * 40: [np.array([0, 1])]},
+    )
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, mesh)
+
+    out = meshlane.read(path)
+    assert sorted(out.point_data) == ["velocityX", "velocityY", "velocityZ"]
+    assert list(out.cell_sets) == ["a" * 32]
+
+
+def test_write_cgns_library_file(tmp_path):
+    mesh = meshlane.read(MESH_DIR / "cgnslib_vers-4400.cgns")
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, mesh)
+
+    out = meshlane.read(path)
+    assert _counts(out) == _counts(mesh)
+    sizes = {k: sum(len(x) for x in v) for k, v in out.cell_sets.items()}
+    assert sizes == {"Ilo": 128, "Ihi": 128, "Walls": 960}
+    for name in ("Density", "Pressure"):
+        assert np.allclose(out.point_data[name], mesh.point_data[name])
+
+
+def test_write_face_used_three_times(tmp_path):
+    # a malformed cell listing a face three times: the third use gets its own face
+    cube = [
+        np.array(f)
+        for f in ([0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6])
+    ]
+    shared = np.array([3, 0, 4, 7])
+    mesh = meshlane.Mesh(
+        _POINTS[:8],
+        [("polyhedron8", np.array([cube + [shared, shared, shared]], dtype=object))],
+    )
+    path = tmp_path / "mesh.cgns"
+    meshlane.cgns.write(path, mesh)
+
+    with h5py.File(path, "r") as f:
+        ngon = f["Base/Zone/NGonElements/ElementRange/ data"][()]
+    assert ngon.tolist() == [1, 7]
