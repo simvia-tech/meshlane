@@ -381,3 +381,149 @@ def test_read_cgns_library_files(filename, cells):
         counts[b.type] = counts.get(b.type, 0) + len(b.data)
     assert counts == cells
     assert (_volumes(mesh) > 0).all()
+
+
+# -- boundary conditions, families, fields --------------------------------------
+
+
+def _hex_tet_zone(f):
+    """The hexahedron + tetrahedron of _POINTS, with a quad (bottom) and a
+    triangle (a side of the tetrahedron) as boundary elements 3 and 4."""
+    zone = cg.unstructured_zone(cg.base(f), _POINTS, 2)
+    cg.section(zone, "Hex", 17, 1, _HEX, 1)
+    cg.section(zone, "Tet", 10, 2, _TET, 1)
+    cg.section(zone, "Bottom", 7, 3, _QUAD, 1)
+    cg.section(zone, "Side", 5, 4, _TRI, 1)
+    return zone
+
+
+def _set_sizes(mesh):
+    return {k: [len(x) for x in v] for k, v in mesh.cell_sets.items()}
+
+
+def test_read_bcs(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = _hex_tet_zone(f)
+        cg.bc(zone, "bottom", [3], location="FaceCenter")
+        cg.bc(zone, "side", [4, 4], kind="ElementRange")
+        cg.bc(zone, "fluid", [1, 2], location="CellCenter")
+        cg.bc(zone, "base nodes", [1, 2, 3, 4])  # Vertex: the bottom quad
+
+    mesh = meshlane.read(path)
+
+    assert [b.type for b in mesh.cells] == ["hexahedron", "tetra", "quad", "triangle"]
+    assert _set_sizes(mesh) == {
+        "bottom": [0, 0, 1, 0],
+        "side": [0, 0, 0, 1],
+        "fluid": [1, 1, 0, 0],
+        "base nodes": [0, 0, 1, 0],
+    }
+    assert mesh.point_sets["base nodes"].tolist() == [0, 1, 2, 3]
+
+
+def test_read_bcs_cgns_1(tmp_path):
+    # CGNS 1.x: the location of a BC is under its BCDataSet, the family name is
+    # the name of the FamilyName_t node, and some writers used 0-based lists
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path, version=1.2) as f:
+        zone = cg.unstructured_zone(cg.base(f), _POINTS, 2)
+        cg.section(zone, "Bottom", 7, 1, _QUAD, 1, dtype=np.int32)
+        hexa = cg.section(zone, "Hex", 17, 2, _HEX, 1, dtype=np.int32)
+        cg.node(hexa, "fluid", "FamilyName_t")
+        cg.bc(zone, "bottom", [0], kind="ElementList")
+        boundary = cg.bc(zone, "bottom faces", [1])
+        dataset = cg.node(boundary, "DataSet", "BCDataSet_t", "BCWall")
+        cg.node(dataset, "GridLocation", "GridLocation_t", "FaceCenter")
+
+    mesh = meshlane.read(path)
+
+    assert [b.type for b in mesh.cells] == ["quad", "hexahedron"]
+    assert _set_sizes(mesh) == {
+        "fluid": [0, 1],
+        "bottom": [1, 0],
+        "bottom faces": [1, 0],
+    }
+
+
+def test_read_families(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = _hex_tet_zone(f)
+        cg.node(zone["Hex"], "FamilyName", "FamilyName_t", "solid")
+        cg.node(zone["Hex"], "Extra", "AdditionalFamilyName_t", "heated")
+        cg.node(zone["Tet"], "FamilyName", "FamilyName_t", "solid")
+        cg.node(zone, "FamilyName", "FamilyName_t", "part")
+
+    mesh = meshlane.read(path)
+
+    assert _set_sizes(mesh) == {
+        "solid": [1, 1, 0, 0],
+        "heated": [1, 0, 0, 0],
+        "part": [1, 1, 0, 0],
+    }
+
+
+def test_read_bc_on_interior_ngon_face(tmp_path):
+    # NGON_n faces are returned on the boundary, and also when a BC lists them
+    faces, cells = _box_faces()
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = cg.unstructured_zone(cg.base(f), _BOX, 2)
+        _write_ngon(zone, faces, cells, cgns4=True, sign=1)
+        cg.bc(zone, "baffle", [11], location="FaceCenter")
+
+    mesh = meshlane.read(path)
+
+    assert _counts(mesh) == {"hexahedron": 2, "quad": 11}
+    assert sum(len(x) for x in mesh.cell_sets["baffle"]) == 1
+
+
+def test_read_flow_solutions(tmp_path):
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = _hex_tet_zone(f)
+        cg.solution(zone, "Nodes", {"T": np.arange(9)})
+        # cell data with a rind cell on each side, and a name used twice
+        cg.solution(
+            zone, "Cells", {"T": [-1, 10, 20, -1]}, location="CellCenter", rind=[1, 1]
+        )
+
+    mesh = meshlane.read(path)
+
+    assert sorted(mesh.point_data) == ["T_Nodes"]
+    assert mesh.point_data["T_Nodes"].tolist() == list(range(9))
+    cell = mesh.cell_data["T_Cells"]
+    assert cell[0].tolist() == [10] and cell[1].tolist() == [20]
+    assert np.isnan(cell[2]).all() and np.isnan(cell[3]).all()
+
+
+def test_read_flow_solution_pointers(tmp_path):
+    # one solution per time step: the first one is read
+    path = tmp_path / "mesh.cgns"
+    with cg.new_file(path) as f:
+        zone = _hex_tet_zone(f)
+        cg.solution(zone, "Step0", {"T": np.zeros(9)})
+        cg.solution(zone, "Step1", {"T": np.ones(9)})
+        iterative = cg.node(zone, "ZoneIterativeData", "ZoneIterativeData_t")
+        names = np.zeros((2, 32), dtype=np.int8)
+        for i, name in enumerate(("Step0", "Step1")):
+            names[i, : len(name)] = np.frombuffer(name.encode(), np.int8)
+        pointers = iterative.create_group("FlowSolutionPointers", track_order=True)
+        pointers.attrs.create("name", np.bytes_("FlowSolutionPointers"), dtype="S33")
+        pointers.attrs.create("label", np.bytes_("DataArray_t"), dtype="S33")
+        pointers.attrs.create("type", np.bytes_("C1"), dtype="S3")
+        pointers.create_dataset(" data", data=names)
+
+    mesh = meshlane.read(path)
+
+    assert list(mesh.point_data) == ["T"]
+    assert (mesh.point_data["T"] == 0).all()
+
+
+def test_read_cgns_library_groups():
+    mesh = meshlane.read(MESH_DIR / "cgnslib_vers-4400.cgns")
+
+    sizes = {k: sum(len(x) for x in v) for k, v in mesh.cell_sets.items()}
+    assert sizes == {"Ilo": 128, "Ihi": 128, "Walls": 960}
+    assert sorted(mesh.point_data) == ["Density", "Pressure"]

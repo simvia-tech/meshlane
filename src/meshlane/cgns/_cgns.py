@@ -24,6 +24,8 @@ from ._elements import (
     split_mixed,
     to_meshlane,
 )
+from ._fields import zone_fields
+from ._groups import boundary_conditions, family_names
 from ._polyhedra import build_cells
 from ._tree import child, children, data, file_version, name, resolve, text
 
@@ -64,29 +66,180 @@ def _read_base(base, version):
         zones = first_step
         warn(f"Base {name(base)} is a time series, only its first step is read.")
 
-    points, cells, zone_blocks = [], [], {}
-    offset = 0
+    mesh = _Assembly()
     for zone in zones:
         zone_type = child(zone, "ZoneType_t")
         zone_type = text(zone_type).strip() if zone_type is not None else "Unstructured"
         if zone_type != "Unstructured":
             raise ReadError(f"Zone {name(zone)}: {zone_type} zones are not supported.")
-        zone_points = _coordinates(zone, phys_dim)
-        first_block = len(cells)
-        for cell_type, conn, _ in _zone_cells(zone, zone_points, version):
-            cells.append(CellBlock(cell_type, _shift(cell_type, conn, offset)))
-        zone_blocks[name(zone)] = (first_block, len(cells))
-        points.append(zone_points)
-        offset += len(zone_points)
+        points = _coordinates(zone, phys_dim)
+        groups = boundary_conditions(zone, version)
+        keep = [v for _, kind, v in groups if kind == "elements"]
+        keep = np.concatenate(keep) if keep else np.zeros(0, dtype=np.int64)
+        blocks, section_groups = _zone_cells(zone, points, version, keep)
+        groups += section_groups
+        groups += [(f, "zone", None) for f in family_names(zone, version)]
+        mesh.add_zone(name(zone), points, blocks, groups, zone_fields(zone, version))
+    return mesh.mesh(multi_zone=len(zones) > 1)
 
-    cell_sets = {}
-    if len(zones) > 1:
-        for zone_name, (a, b) in zone_blocks.items():
-            cell_sets[zone_name] = [
-                np.arange(len(block.data)) if a <= i < b else np.array([], dtype=int)
-                for i, block in enumerate(cells)
+
+class _Assembly:
+    """Gathers the zones of a base into one mesh: points and blocks are
+    concatenated, groups become point/cell sets and fields point/cell data."""
+
+    def __init__(self):
+        self.points = []
+        self.blocks = []
+        self.num_points = 0
+        self.point_sets = {}
+        self.cell_sets = {}  # name -> {block index: [local indices]}
+        self.zone_blocks = {}
+        self.point_data = []  # per zone: {name: values}
+        self.cell_data = {}  # name -> {block index: values}
+
+    def _add_cells(self, set_name, block, local):
+        if len(local):
+            self.cell_sets.setdefault(set_name, {}).setdefault(block, []).append(local)
+
+    def add_zone(self, zone_name, points, blocks, groups, fields):
+        offset = self.num_points
+        first = len(self.blocks)
+        for cell_type, conn, _ in blocks:
+            self.blocks.append(CellBlock(cell_type, _shift(cell_type, conn, offset)))
+        indices = range(first, len(self.blocks))
+        self.zone_blocks[zone_name] = indices
+        dims = [self.blocks[i].dim for i in indices]
+        dim = max(dims, default=0)
+
+        # element number -> (block, local index)
+        numbers = [np.asarray(b[2], dtype=np.int64) for b in blocks]
+        if numbers:
+            all_numbers = np.concatenate(numbers)
+            block_of = np.repeat(
+                np.arange(first, len(self.blocks)), [len(n) for n in numbers]
+            )
+            local_of = np.concatenate([np.arange(len(n)) for n in numbers])
+            order = np.argsort(all_numbers, kind="stable")
+            all_numbers, block_of, local_of = (
+                all_numbers[order],
+                block_of[order],
+                local_of[order],
+            )
+        else:
+            all_numbers = block_of = local_of = np.zeros(0, dtype=np.int64)
+
+        for group, kind, values in groups:
+            if kind == "elements":
+                pos = np.searchsorted(all_numbers, values)
+                ok = pos < len(all_numbers)
+                pos = pos[ok]
+                pos = pos[all_numbers[pos] == values[ok]]
+                for b in np.unique(block_of[pos]).tolist():
+                    self._add_cells(group, b, local_of[pos][block_of[pos] == b])
+            elif kind == "zone":
+                for i, d in zip(indices, dims):
+                    if d == dim:
+                        self._add_cells(group, i, np.arange(len(self.blocks[i].data)))
+            else:
+                nodes = values - 1
+                self.point_sets.setdefault(group, []).append(nodes + offset)
+                # the boundary faces made of these nodes
+                in_group = np.zeros(len(points), dtype=bool)
+                in_group[nodes] = True
+                for i, d in zip(indices, dims):
+                    block = self.blocks[i]
+                    if d == dim - 1 and not block.type.startswith("polyhedron"):
+                        conn = np.asarray(block.data) - offset
+                        inside = in_group[conn].all(axis=1)
+                        self._add_cells(group, i, np.flatnonzero(inside))
+
+        zone_point_data = {}
+        volume = [k for k, d in enumerate(dims) if d == dim]
+        volume_numbers = (
+            np.sort(np.concatenate([numbers[k] for k in volume]))
+            if volume
+            else np.zeros(0, dtype=np.int64)
+        )
+        skipped = set()
+        for field, loc, values in fields:
+            if loc == "Vertex" and len(values) == len(points):
+                zone_point_data[field] = values
+            elif loc == "CellCenter" and len(values) in (
+                len(volume_numbers),
+                len(all_numbers),
+            ):
+                targets = (
+                    volume_numbers
+                    if len(values) == len(volume_numbers)
+                    else all_numbers
+                )
+                pos = np.searchsorted(all_numbers, targets)
+                per_block = self.cell_data.setdefault(field, {})
+                for b in np.unique(block_of[pos]).tolist():
+                    sel = block_of[pos] == b
+                    arr = per_block.setdefault(
+                        b, np.full(len(self.blocks[b].data), np.nan)
+                    )
+                    arr[local_of[pos][sel]] = values[sel]
+            else:
+                skipped.add(f"{field} ({loc})")
+        if skipped:
+            warn(f"Zone {zone_name}: fields not read: {', '.join(sorted(skipped))}.")
+        self.point_data.append((len(points), zone_point_data))
+        self.points.append(points)
+        self.num_points += len(points)
+
+    def mesh(self, multi_zone):
+        n = len(self.blocks)
+        empty = np.zeros(0, dtype=np.int64)
+        cell_sets = {
+            set_name: [
+                np.unique(np.concatenate(per_block[i])) if i in per_block else empty
+                for i in range(n)
             ]
-    return Mesh(np.concatenate(points), cells, cell_sets=cell_sets)
+            for set_name, per_block in self.cell_sets.items()
+        }
+        if multi_zone:
+            for zone_name, indices in self.zone_blocks.items():
+                cell_sets.setdefault(zone_name, [empty] * n)
+                cell_sets[zone_name] = [
+                    (
+                        np.union1d(
+                            cell_sets[zone_name][i], np.arange(len(self.blocks[i].data))
+                        )
+                        if i in indices
+                        else cell_sets[zone_name][i]
+                    )
+                    for i in range(n)
+                ]
+        point_sets = {
+            k: np.unique(np.concatenate(v)) for k, v in self.point_sets.items()
+        }
+        names = sorted({f for _, fields in self.point_data for f in fields})
+        point_data = {
+            f: np.concatenate(
+                [
+                    fields.get(f, np.full(count, np.nan))
+                    for count, fields in self.point_data
+                ]
+            )
+            for f in names
+        }
+        cell_data = {
+            f: [
+                per_block.get(i, np.full(len(self.blocks[i].data), np.nan))
+                for i in range(n)
+            ]
+            for f, per_block in self.cell_data.items()
+        }
+        return Mesh(
+            np.concatenate(self.points),
+            self.blocks,
+            point_data=point_data,
+            cell_data=cell_data,
+            point_sets=point_sets,
+            cell_sets=cell_sets,
+        )
 
 
 def _time_step_zones(base):
@@ -155,10 +308,12 @@ def _section_arrays(section):
     return first, last, conn, offsets
 
 
-def _zone_cells(zone, points, version):
+def _zone_cells(zone, points, version, keep_faces):
     """Cell blocks of an unstructured zone, as (cell type, 0-based connectivity,
-    CGNS element numbers)."""
+    CGNS element numbers), and the family groups of its sections. NGON_n faces
+    are returned when they are on the boundary or in keep_faces."""
     num_points = len(points)
+    groups = []
     sections = sorted(children(zone, "Elements_t"), key=lambda s: _element_range(s)[0])
     blocks, ngon, nface = [], [], []
     for section in sections:
@@ -166,6 +321,7 @@ def _zone_cells(zone, points, version):
         first, last, conn, offsets = _section_arrays(section)
         n = last - first + 1
         numbers = np.arange(first, last + 1)
+        groups += [(f, "elements", numbers) for f in family_names(section, version)]
         if code == NGON_n:
             ngon.append((numbers, *ragged(conn, n, offsets)))
         elif code == NFACE_n:
@@ -182,18 +338,19 @@ def _zone_cells(zone, points, version):
             blocks.append((cell_type, nodes - 1, numbers))
 
     if ngon:
-        blocks.extend(_polygonal(points, ngon, nface))
+        blocks.extend(_polygonal(points, ngon, nface, keep_faces))
 
     for cell_type, conn, _ in blocks:
         if cell_type.startswith("polyhedron"):
             continue
         if len(conn) and (conn.min() < 0 or conn.max() >= num_points):
             raise ReadError(f"Zone {name(zone)}: node index out of range.")
-    return blocks
+    return blocks, groups
 
 
-def _polygonal(points, ngon, nface):
-    """Blocks of the NGON_n faces and NFACE_n cells of a zone."""
+def _polygonal(points, ngon, nface, keep_faces):
+    """Blocks of the NGON_n faces and NFACE_n cells of a zone: the cells, and the
+    faces on the boundary or listed in keep_faces."""
     ngon.sort(key=lambda s: s[0][0])
     face_numbers = np.concatenate([s[0] for s in ngon])
     face_nodes = np.concatenate([s[2] for s in ngon]) - 1
@@ -231,11 +388,8 @@ def _polygonal(points, ngon, nface):
         points3, face_ptr, face_nodes, cell_ptr, cell_faces, signed > 0
     )
     blocks = [(t, d, cell_numbers[ids]) for t, d, ids in cells]
-    blocks.extend(
-        _face_blocks(
-            face_ptr, face_nodes, np.flatnonzero(boundary), reverse, face_numbers
-        )
-    )
+    faces = np.flatnonzero(boundary | np.isin(face_numbers, keep_faces))
+    blocks.extend(_face_blocks(face_ptr, face_nodes, faces, reverse, face_numbers))
     return blocks
 
 

@@ -73,3 +73,34 @@ def section(zone, name, code, first, connectivity, num, offsets=None, dtype=np.i
         np.asarray(connectivity, dtype=dtype).ravel(),
     )
     return elements
+
+
+def bc(zone, name, values, kind="PointList", location=None, family=None):
+    """A BC_t node (under the zone's ZoneBC, created if needed)."""
+    zone_bc = zone.get("ZoneBC") or node(zone, "ZoneBC", "ZoneBC_t")
+    boundary = node(zone_bc, name, "BC_t", "BCWall")
+    is_range = kind.endswith("Range")
+    values = np.asarray(values, dtype=np.int64)
+    node(
+        boundary,
+        kind,
+        "IndexRange_t" if is_range else "IndexArray_t",
+        values.reshape(-1, 1) if not is_range else values,
+    )
+    if location is not None:
+        node(boundary, "GridLocation", "GridLocation_t", location)
+    if family is not None:
+        node(boundary, "FamilyName", "FamilyName_t", family)
+    return boundary
+
+
+def solution(zone, name, fields, location=None, rind=None):
+    """A FlowSolution_t node with the given {name: values} arrays."""
+    sol = node(zone, name, "FlowSolution_t")
+    if location is not None:
+        node(sol, "GridLocation", "GridLocation_t", location)
+    if rind is not None:
+        node(sol, "Rind", "Rind_t", np.int32(rind))
+    for field, values in fields.items():
+        node(sol, field, "DataArray_t", np.asarray(values, dtype=float))
+    return sol
