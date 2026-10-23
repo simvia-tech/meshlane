@@ -140,21 +140,10 @@ def write_points_cells(
 
 
 def _pick_best_format(file_formats, mesh):
+    # .msh is shared by Gmsh and Ansys Fluent: Gmsh is the default (lossless and
+    # the most common use); Fluent is written with file_format="ansys"
     if "gmsh" in file_formats:
-        gmsh_keys = {"gmsh:physical", "gmsh:geometrical", "gmsh:dim_tags"}
-        med_keys = {"cell_tags", "point_tags"}
-        has_gmsh = bool(
-            gmsh_keys & set(mesh.cell_data.keys())
-        ) or bool(
-            gmsh_keys & set(mesh.point_data.keys())
-        )
-        has_med = (
-            bool(med_keys & set(mesh.cell_data.keys()))
-            or bool(med_keys & set(mesh.point_data.keys()))
-            or any(k.startswith("med:") for k in mesh.field_data)
-        )
-        if has_gmsh or has_med:
-            return "gmsh"
+        return "gmsh"
     return file_formats[0]
 
 

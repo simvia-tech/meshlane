@@ -69,6 +69,6 @@ def test_msh_format_selection_for_med_data():
     )
     assert _pick_best_format(["ansys", "gmsh"], mesh2) == "gmsh"
 
-    # Case 3: bare mesh → default (ansys)
+    # Case 3: bare mesh → Gmsh too (Fluent only with file_format="ansys")
     mesh3 = meshlane.Mesh(points, cells)
-    assert _pick_best_format(["ansys", "gmsh"], mesh3) == "ansys"
+    assert _pick_best_format(["ansys", "gmsh"], mesh3) == "gmsh"
