@@ -17,12 +17,12 @@ import re
 
 import numpy as np
 
-from ..__about__ import __version__
-from .._exceptions import ReadError, WriteError
+from .._exceptions import ReadError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import CellBlock, Mesh
 from ._cells import Faces, build_cells
+from ._write import write
 
 _SECTION = re.compile(rb"\(\s*([0-9]+)")
 _SPACE = re.compile(rb"\s*")
@@ -433,80 +433,6 @@ def read(filename):
         return parser.mesh()
     except (ValueError, IndexError, KeyError) as e:
         raise ReadError(f"Invalid Fluent mesh file: {e}") from e
-
-
-def write(filename, mesh, binary=True):
-    with open_file(filename, "wb") as fh:
-        # header
-        fh.write(f'(1 "meshlane {__version__}")\n'.encode())
-
-        # dimension
-        num_points, dim = mesh.points.shape
-        if dim not in [2, 3]:
-            raise WriteError(f"Can only write dimension 2, 3, got {dim}.")
-        fh.write((f"(2 {dim})\n").encode())
-
-        # total number of nodes
-        first_node_index = 1
-        fh.write((f"(10 (0 {first_node_index:x} {num_points:x} 0))\n").encode())
-
-        # total number of cells
-        total_num_cells = sum(len(c) for c in mesh.cells)
-        fh.write((f"(12 (0 1 {total_num_cells:x} 0))\n").encode())
-
-        # Write nodes
-        key = "3010" if binary else "10"
-        fh.write(
-            f"({key} (1 {first_node_index:x} {num_points:x} 1 {dim:x})(\n".encode()
-        )
-        if binary:
-            mesh.points.tofile(fh)
-            fh.write(b"\n)")
-            fh.write(b"End of Binary Section 3010)\n")
-        else:
-            np.savetxt(fh, mesh.points, fmt="%.16e")
-            fh.write(b"))\n")
-
-        # Write cells
-        meshio_to_ansys_type = {
-            # "mixed": 0,
-            "triangle": 1,
-            "tetra": 2,
-            "quad": 3,
-            "hexahedron": 4,
-            "pyramid": 5,
-            "wedge": 6,
-            # "polyhedral": 7,
-        }
-        first_index = 0
-        binary_dtypes = {
-            # np.int16 is not allowed
-            np.dtype("int32"): "2012",
-            np.dtype("int64"): "3012",
-        }
-        for cell_block in mesh.cells:
-            cell_type = cell_block.type
-            values = cell_block.data
-            key = binary_dtypes[values.dtype] if binary else "12"
-            last_index = first_index + len(values) - 1
-            try:
-                ansys_cell_type = meshio_to_ansys_type[cell_type]
-            except KeyError:
-                legal_keys = ", ".join(meshio_to_ansys_type.keys())
-                raise KeyError(
-                    f"Illegal ANSYS cell type '{cell_type}'. (legal: {legal_keys})"
-                )
-            fh.write(
-                f"({key} (1 {first_index:x} {last_index:x} 1 {ansys_cell_type})(\n".encode()
-            )
-            if binary:
-                (values + first_node_index).tofile(fh)
-                fh.write(b"\n)")
-                fh.write((f"End of Binary Section {key})\n").encode())
-            else:
-                np.savetxt(fh, values + first_node_index, fmt="%x")
-                fh.write(b"))\n")
-            first_index = last_index + 1
 
 
 register_format("ansys", [".msh"], read, {"ansys": write})

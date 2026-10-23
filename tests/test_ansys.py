@@ -12,26 +12,32 @@ from . import helpers
 MESH_DIR = pathlib.Path(__file__).resolve().parent / "meshes" / "ansys"
 
 
-@pytest.mark.parametrize(
-    "mesh",
-    [
-        helpers.empty_mesh,
-        helpers.tri_mesh,
-        helpers.tri_mesh_2d,
-        helpers.quad_mesh,
-        helpers.tri_quad_mesh,
-        helpers.tet_mesh,
-        helpers.hex_mesh,
-        helpers.pyramid_mesh,
-        helpers.wedge_mesh,
-    ],
-)
-@pytest.mark.parametrize("binary", [False, True])
-def test(mesh, binary, tmp_path):
-    def writer(*args, **kwargs):
-        return meshlane.ansys.write(*args, binary=binary, **kwargs)
-
-    helpers.write_read(tmp_path, writer, meshlane.ansys.read, mesh, 1.0e-15)
+def test_read_legacy_meshlane_files(tmp_path):
+    # files written by meshlane before 5.6 (and meshio) list the cell nodes in
+    # section 12 instead of faces; binary data follows a newline after "("
+    points = helpers.tet_mesh.points
+    conn = helpers.tet_mesh.cells[0].data + 1
+    ascii_path = tmp_path / "ascii.msh"
+    rows = "\n".join(" ".join(repr(float(x)) for x in p) for p in points)
+    cells = "\n".join(" ".join(f"{i:x}" for i in c) for c in conn)
+    ascii_path.write_text(
+        '(1 "meshlane 5.5.0")\n(2 3)\n(10 (0 1 5 0))\n(12 (0 1 2 0))\n'
+        f"(10 (1 1 5 1 3)(\n{rows}\n))\n(12 (1 1 2 1 2)(\n{cells}\n))\n"
+    )
+    binary_path = tmp_path / "binary.msh"
+    binary_path.write_bytes(
+        b'(1 "meshlane 5.5.0")\n(2 3)\n(10 (0 1 5 0))\n(12 (0 1 2 0))\n'
+        + b"(3010 (1 1 5 1 3)(\n"
+        + np.asarray(points, "<f8").tobytes()
+        + b"\n)End of Binary Section 3010)\n(3012 (1 1 2 1 2)(\n"
+        + np.asarray(conn, "<i8").tobytes()
+        + b"\n)End of Binary Section 3012)\n"
+    )
+    for path in (ascii_path, binary_path):
+        mesh = meshlane.ansys.read(path)
+        assert np.allclose(mesh.points, points)
+        assert mesh.cells[0].type == "tetra"
+        assert (mesh.cells[0].data == conn - 1).all()
 
 
 # -- Fluent files built by hand ------------------------------------------------
@@ -507,3 +513,196 @@ def test_read_fluent_h5_with_msh_extension(tmp_path):
     mesh = meshlane.read(path)
 
     assert {b.type: len(b.data) for b in mesh.cells} == {"hexahedron": 10, "quad": 42}
+
+
+# -- writer --------------------------------------------------------------------
+
+
+def _parse(path):
+    """Faces, cells and zones of a Fluent file, as the reader parses them."""
+    from meshlane.ansys._ansys import _Parser
+
+    parser = _Parser(pathlib.Path(path).read_bytes())
+    parser.parse()
+    return parser
+
+
+def _volume_counts(mesh):
+    out = {}
+    for b in mesh.cells:
+        if b.dim == max(c.dim for c in mesh.cells):
+            out[b.type] = out.get(b.type, 0) + len(b.data)
+    return out
+
+
+@pytest.mark.parametrize("binary", [True, False])
+@pytest.mark.parametrize(
+    "mesh",
+    [
+        helpers.tet_mesh,
+        helpers.hex_mesh,
+        helpers.wedge_mesh,
+        helpers.pyramid_mesh,
+        meshlane.Mesh(_POINTS_3D, [(t, [c]) for t, c in _CELLS_3D]),
+        helpers.polyhedron_mesh,
+    ],
+)
+def test_write_read_3d(tmp_path, mesh, binary):
+    path = tmp_path / "mesh.msh"
+    meshlane.ansys.write(path, mesh, binary=binary)
+
+    out = meshlane.ansys.read(path)
+
+    volumes = _volumes(out)
+    assert (volumes > 0).all()
+    expected = np.abs(_volumes(mesh)) if mesh is not helpers.polyhedron_mesh else None
+    if expected is not None:
+        assert np.isclose(volumes.sum(), expected.sum())
+        assert _volume_counts(out) == _volume_counts(mesh)
+    # every boundary face is in the default wall zone, pointing outward
+    sizes = {k: sum(len(x) for x in v) for k, v in out.cell_sets.items()}
+    boundary = _boundary_faces(out)
+    assert sizes == {"fluid": sum(_volume_counts(out).values()), "wall": len(boundary)}
+    assert np.isclose(_enclosed_volume(out.points, boundary), volumes.sum())
+
+
+@pytest.mark.parametrize("binary", [True, False])
+@pytest.mark.parametrize("mesh", [helpers.tri_mesh_2d, helpers.quad_mesh])
+def test_write_read_2d(tmp_path, mesh, binary):
+    path = tmp_path / "mesh.msh"
+    meshlane.ansys.write(path, mesh, binary=binary)
+
+    out = meshlane.ansys.read(path)
+
+    assert out.points.shape[1] == 2
+    assert _volume_counts(out) == _volume_counts(mesh)
+    for b in out.cells:
+        if b.dim == 2:
+            p = out.points[b.data]
+            area = np.sum(
+                p[..., 0] * np.roll(p[..., 1], -1, axis=1)
+                - np.roll(p[..., 0], -1, axis=1) * p[..., 1],
+                axis=1,
+            )
+            assert (area > 0).all()
+
+
+@pytest.mark.parametrize("dim", [2, 3])
+def test_write_face_orientation(tmp_path, dim):
+    # Fluent's normal of a face (z x edge in 2D) points to c0; c1 = 0 on the
+    # boundary, so boundary normals point into the domain
+    mesh = helpers.quad_mesh if dim == 2 else helpers.hex_mesh
+    mesh = meshlane.Mesh(mesh.points, mesh.cells)
+    if dim == 3:  # two hexahedra, to have an interior face
+        shifted = mesh.cells[0].data + len(mesh.points)
+        mesh = meshlane.Mesh(
+            np.concatenate([mesh.points, mesh.points + [0, 0, 1]]),
+            [("hexahedron", np.concatenate([mesh.cells[0].data, shifted]))],
+        )
+    path = tmp_path / "mesh.msh"
+    meshlane.ansys.write(path, mesh, binary=False)
+
+    parser = _parse(path)
+    points = np.concatenate([p for _, p in parser.nodes])
+    cells = [b.data for b in mesh.cells if b.dim == dim]
+    centers = np.concatenate([points[c].mean(axis=1) for c in cells])
+    checked = 0
+    for _, _, ptr, nodes, c0, c1 in parser.face_zones:
+        for k in range(len(c0)):
+            f = nodes[ptr[k] : ptr[k + 1]] - 1
+            p = points[f]
+            if dim == 2:
+                d = p[1] - p[0]
+                normal = np.array([-d[1], d[0]])
+            else:
+                normal = np.cross(p[1] - p[0], p[2] - p[0])
+            towards_c0 = np.dot(normal, centers[c0[k] - 1] - p.mean(axis=0))
+            assert towards_c0 > 0
+            checked += 1
+    assert checked > 0
+
+
+def test_write_zones(tmp_path):
+    # a hexahedron (solid) on a tetrahedron (fluid): the shared face is in a
+    # group ("interface", a two-sided wall), the bottom quad is the inlet
+    mesh = meshlane.Mesh(
+        _POINTS_3D,
+        [
+            ("hexahedron", [_CELLS_3D[0][1]]),
+            ("pyramid", [_CELLS_3D[1][1]]),
+            ("quad", [[4, 5, 6, 7], [0, 3, 2, 1]]),
+        ],
+        cell_sets={
+            "block": [np.array([0]), np.array([], int), np.array([], int)],
+            "roof air": [np.array([], int), np.array([0]), np.array([], int)],
+            "interface": [np.array([], int), np.array([], int), np.array([0])],
+            "inlet": [np.array([], int), np.array([], int), np.array([1])],
+        },
+    )
+    path = tmp_path / "mesh.msh"
+    meshlane.ansys.write(
+        path, mesh, zone_types={"block": "solid", "inlet": "velocity-inlet"}
+    )
+
+    zones = _parse(path).zones
+    by_name = {name: kind for kind, name in zones.values()}
+    assert by_name == {
+        "block": "solid",
+        "roof_air": "fluid",  # blanks are not allowed in Fluent zone names
+        "interface": "wall",
+        "inlet": "velocity-inlet",
+        "wall": "wall",
+    }
+    out = meshlane.ansys.read(path)
+    sizes = {k: sum(len(x) for x in v) for k, v in out.cell_sets.items()}
+    assert sizes == {"block": 1, "roof_air": 1, "interface": 1, "inlet": 1, "wall": 8}
+
+
+def test_write_unknown_zone_type(tmp_path):
+    with pytest.raises(meshlane.WriteError, match="zone type"):
+        meshlane.ansys.write(
+            tmp_path / "mesh.msh", helpers.tet_mesh, zone_types={"x": "nozzle"}
+        )
+
+
+def test_write_quadratic_and_surface(tmp_path):
+    path = tmp_path / "quadratic.msh"
+    meshlane.ansys.write(path, helpers.hex20_mesh)
+    assert _volume_counts(meshlane.ansys.read(path)) == {"hexahedron": 1}
+
+    # a surface in space is written as faces without cells
+    surface = meshlane.Mesh(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        [("triangle", [[0, 1, 2], [0, 1, 3]])],
+    )
+    path = tmp_path / "surface.msh"
+    meshlane.ansys.write(path, surface)
+    out = meshlane.ansys.read(path)
+    assert [(b.type, len(b.data)) for b in out.cells] == [("triangle", 2)]
+
+
+@pytest.mark.parametrize(
+    "filename", ["hex.msh", "solid.msh", "disk.msh", "flap.msh", "simple-duct.msh.h5"]
+)
+def test_write_fluent_files(tmp_path, filename):
+    if filename.endswith(".h5"):
+        pytest.importorskip("h5py")
+    mesh = meshlane.read(MESH_DIR / filename)
+    path = tmp_path / "mesh.msh"
+    meshlane.ansys.write(path, mesh)
+
+    out = meshlane.ansys.read(path)
+
+    assert _counts(out) == _counts(mesh)
+
+    def sizes(m):
+        return sorted(sum(len(x) for x in v) for v in m.cell_sets.values())
+
+    assert sizes(out) == sizes(mesh)
+
+
+def _counts(mesh):
+    out = {}
+    for b in mesh.cells:
+        out[b.type] = out.get(b.type, 0) + len(b.data)
+    return out
