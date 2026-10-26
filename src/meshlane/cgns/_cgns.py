@@ -74,7 +74,9 @@ def read_multi(filename):
         bases = children(f, "CGNSBase_t")
         for base in bases:
             phys_dim = int(np.ravel(data(base))[1])
-            for zone in children(base, "Zone_t"):
+            zones = children(base, "Zone_t")
+            _warn_structured(zones)
+            for zone in zones:
                 mesh = _Assembly()
                 try:
                     _add_zone(mesh, zone, phys_dim, version)
@@ -98,10 +100,25 @@ def _read_base(base, version):
         zones = first_step
         warn(f"Base {name(base)} is a time series, only its first step is read.")
 
+    _warn_structured(zones)
     mesh = _Assembly()
     for zone in zones:
         _add_zone(mesh, zone, phys_dim, version)
     return mesh.mesh(multi_zone=len(zones) > 1)
+
+
+def _is_structured(zone):
+    zt = child(zone, "ZoneType_t")
+    return (text(zt).strip("\x00 ") if zt is not None else "") == "Structured"
+
+
+def _warn_structured(zones):
+    n = sum(_is_structured(z) for z in zones)
+    if n:
+        warn(
+            f"CGNS: {n} structured zone(s) converted to unstructured cells; "
+            "meshlane handles only unstructured meshes."
+        )
 
 
 def _add_zone(mesh, zone, phys_dim, version):
