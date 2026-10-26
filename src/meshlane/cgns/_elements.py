@@ -27,8 +27,10 @@ TYPES = {
     10: ("tetra", 4),
     11: ("tetra10", 10),
     12: ("pyramid", 5),
+    13: ("pyramid14", 14),
     14: ("wedge", 6),
     15: ("wedge15", 15),
+    16: ("wedge18", 18),
     17: ("hexahedron", 8),
     18: ("hexahedron20", 20),
     19: ("hexahedron27", 27),
@@ -49,9 +51,13 @@ NAMES = {
 _HEXA_20 = list(range(12)) + [16, 17, 18, 19, 12, 13, 14, 15]
 PERMUTATIONS = {
     "wedge15": list(range(9)) + [12, 13, 14, 9, 10, 11],
+    "wedge18": list(range(9)) + [12, 13, 14, 9, 10, 11, 15, 16, 17],
     "hexahedron20": _HEXA_20,
     "hexahedron27": _HEXA_20 + [24, 22, 21, 23, 20, 25, 26],
 }
+
+# pyramid13 and pyramid14 are absent above on purpose: their CGNS node order already
+# matches meshlane's, so they need no permutation.
 
 
 def type_name(code):
