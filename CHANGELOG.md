@@ -6,6 +6,49 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Added
+- OpenVolumeMesh `.ovm` (ASCII) reader and writer. Tetrahedra, pyramids, wedges and
+  hexahedra are rebuilt from the half-face topology; shared edges and faces are written
+  once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
+  Properties are skipped on reading, and point/cell data are not written. (#7)
+- OpenFOAM polyMesh writer, ASCII or binary (`binary=True`, or `meshlane binary
+  case/case.foam`). Writing `case/case.foam` produces
+  `case/constant/polyMesh`; faces are built and matched with numpy, oriented from owner
+  to neighbour and ordered as OpenFOAM requires. Boundary patches come from the groups
+  of surface cells (`cell_sets`, or MED/OpenFOAM `cell_tags`); ungrouped boundary faces
+  go to `defaultFaces`. Quadratic cells are written with their corner nodes, and unused
+  points are dropped. Files a previous mesh left in `polyMesh` (zones, sets,
+  refinement levels) are moved to `polyMesh.orig`. The reader now keeps the patch
+  types in `mesh.patch_types`. (#8)
+
+### Fixed
+- MED: files mixing blocks with and without families (e.g. volume cells without
+  `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
+  Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
+  families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
+  (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
+  readers share the same cell reading code.
+- OpenFOAM reader: binary `faces` files as OpenFOAM writes them (`faceCompactList`)
+  are now read; they failed with a `ValueError`.
+- SU2: writing a mesh with boundary elements no longer fails with `cannot unpack
+  non-iterable CellBlock object`. Marker names are kept: the reader stores them in
+  `cell_sets` (and still in `cell_data["su2:tag"]`), the writer takes them from
+  `cell_sets`, the MED/OpenFOAM `cell_tags` families or the first integer cell data.
+  2D meshes with z = 0 coordinates are written as `NDIME= 2`. Files with Windows line
+  endings or spaces around `=` are read. Reading and writing are vectorized.
+- SU2: multi-zone files (`NZONE`/`IZONE`) are read and written as a list of meshes with
+  `meshlane.su2.read_multi` / `write_multi`, like multi-mesh MED files; they used to
+  give a corrupted mesh. `meshlane convert` and `meshlane info` handle them, e.g.
+  `meshlane convert cht.su2 cht.med` (one MED mesh per zone) and back.
+- SU2: the sections after the markers (periodicity, FFD boxes used by shape
+  optimization) are kept in `mesh.su2_extra` and written back unchanged, instead of
+  producing one warning per line and being lost. Quadratic cells are written with their
+  corner nodes instead of being dropped; unused points are removed; cells that are
+  neither domain nor boundary elements, and groups merged by marker name cleaning, are
+  reported.
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added

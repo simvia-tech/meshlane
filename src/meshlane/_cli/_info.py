@@ -1,9 +1,9 @@
 import numpy as np
 
 from .._common import warn
-from .._helpers import read, reader_map
 from .._exceptions import ReadError
-from ..med import read_med_multi
+from .._helpers import read, reader_map
+from ._multi import multi_format, read_multi
 
 
 def add_args(parser):
@@ -20,16 +20,9 @@ def add_args(parser):
 
 def info(args):
     # read mesh data
-    is_med = False
-    if args.input_format == "med":
-        is_med = True
-    else:
-        lower = args.infile.lower()
-        if lower.endswith(".med"):
-            is_med = True
-
-    if is_med:
-        meshes, names = read_med_multi(args.infile)
+    if multi_format(args.infile, args.input_format):
+        # MED meshes or SU2 zones, one after the other
+        meshes, names = read_multi(args.infile, args.input_format)
         for name, mesh in zip(names, meshes):
             print(f"--- Mesh: {name} ---")
             print(mesh)

@@ -5,6 +5,7 @@
 *.med filter=lfs diff=lfs merge=lfs -text
 *.msh filter=lfs diff=lfs merge=lfs -text
 *.msh.h5 filter=lfs diff=lfs merge=lfs -text
+*.cgns filter=lfs diff=lfs merge=lfs -text
 *.obj filter=lfs diff=lfs merge=lfs -text
 *.ply filter=lfs diff=lfs merge=lfs -text
 *.vtk filter=lfs diff=lfs merge=lfs -text

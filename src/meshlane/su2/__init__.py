@@ -1,3 +1,3 @@
-from ._su2 import read, write
+from ._su2 import read, read_multi, write, write_multi
 
-__all__ = ["read", "write"]
+__all__ = ["read", "read_multi", "write", "write_multi"]
