@@ -8,7 +8,30 @@ top; the meshio history follows below.
 
 ## Unreleased
 
+### Added
+- OpenVolumeMesh `.ovm` (ASCII) reader and writer. Tetrahedra, pyramids, wedges and
+  hexahedra are rebuilt from the half-face topology; shared edges and faces are written
+  once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
+  Properties are skipped on reading, and point/cell data are not written. (#7)
+- OpenFOAM polyMesh writer, ASCII or binary (`binary=True`, or `meshlane binary
+  case/case.foam`). Writing `case/case.foam` produces
+  `case/constant/polyMesh`; faces are built and matched with numpy, oriented from owner
+  to neighbour and ordered as OpenFOAM requires. Boundary patches come from the groups
+  of surface cells (`cell_sets`, or MED/OpenFOAM `cell_tags`); ungrouped boundary faces
+  go to `defaultFaces`. Quadratic cells are written with their corner nodes, and unused
+  points are dropped. Files a previous mesh left in `polyMesh` (zones, sets,
+  refinement levels) are moved to `polyMesh.orig`. The reader now keeps the patch
+  types in `mesh.patch_types`. (#8)
+
 ### Fixed
+- MED: files mixing blocks with and without families (e.g. volume cells without
+  `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
+  Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
+  families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
+  (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
+  readers share the same cell reading code.
+- OpenFOAM reader: binary `faces` files as OpenFOAM writes them (`faceCompactList`)
+  are now read; they failed with a `ValueError`.
 - SU2: writing a mesh with boundary elements no longer fails with `cannot unpack
   non-iterable CellBlock object`. Marker names are kept: the reader stores them in
   `cell_sets` (and still in `cell_data["su2:tag"]`), the writer takes them from

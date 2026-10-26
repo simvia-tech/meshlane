@@ -35,7 +35,8 @@ and writes all of the following and converts smoothly between them:
 > [Gmsh](https://gmsh.info/doc/texinfo/gmsh.html#File-formats) (formats 2.2, 4.0, 4.1, `.msh`),
 > [OBJ](https://en.wikipedia.org/wiki/Wavefront_.obj_file) (`.obj`),
 > [OFF](https://segeval.cs.princeton.edu/public/off_format.html) (`.off`),
-> **OpenFOAM polyMesh** (.foam, read only),
+> **OpenFOAM polyMesh** (.foam, ASCII and binary),
+> **[OpenVolumeMesh](https://www.graphics.rwth-aachen.de/software/openvolumemesh/)** (`.ovm`, ASCII),
 > [PERMAS](https://www.intes.de) (`.post`, `.post.gz`, `.dato`, `.dato.gz`),
 > [PLY](<https://en.wikipedia.org/wiki/PLY_(file_format)>) (`.ply`),
 > [STL](<https://en.wikipedia.org/wiki/STL_(file_format)>) (`.stl`),
@@ -51,8 +52,18 @@ and writes all of the following and converts smoothly between them:
 
 ## What meshlane adds over meshio
 
-- **OpenFOAM polyMesh reader**: ASCII and binary, arbitrary cell types (tri / quad / polyhedra).
+- **OpenFOAM polyMesh reader and writer**: reads ASCII and binary, arbitrary cell types
+  (tri / quad / polyhedra); writes ASCII or binary polyMesh with boundary patches taken
+  from the face groups (MED, Gmsh...), e.g. `meshlane convert mesh.med case/case.foam`
+  then `meshlane binary case/case.foam`.
 - **Ansys/APDL** `.inp` / `.cdb` reader & writer for FEA interoperability.
+- **CGNS** reader & writer (HDF5 files): unstructured and structured zones, linear
+  and quadratic elements, MIXED sections and polyhedra (NGON_n/NFACE_n); boundary
+  conditions and families as groups, flow solutions as point/cell data. Written files
+  pass `cgnscheck`; `meshlane.cgns.read_multi`/`write_multi` keep one mesh per zone.
+- **OpenVolumeMesh** `.ovm` reader & writer (tetra, pyramid, wedge and hexahedron
+  cells), e.g. to convert the output of the [AlgoHex](https://github.com/cgg-bern/AlgoHex)
+  hexahedral mesher.
 - **MED/Salome improvements:**
   - multi-mesh files (several meshes in one `.med`)
   - polygon cell support, including ragged/Voronoi meshes
