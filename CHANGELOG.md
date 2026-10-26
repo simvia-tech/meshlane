@@ -9,6 +9,10 @@ top; the meshio history follows below.
 ## Unreleased
 
 ### Added
+- OpenVolumeMesh `.ovm` (ASCII) reader and writer. Tetrahedra, pyramids, wedges and
+  hexahedra are rebuilt from the half-face topology; shared edges and faces are written
+  once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
+  Properties are skipped on reading, and point/cell data are not written. (#7)
 - OpenFOAM polyMesh writer, ASCII or binary (`binary=True`, or `meshlane binary
   case/case.foam`). Writing `case/case.foam` produces
   `case/constant/polyMesh`; faces are built and matched with numpy, oriented from owner
@@ -20,6 +24,12 @@ top; the meshio history follows below.
   types in `mesh.patch_types`. (#8)
 
 ### Fixed
+- MED: files mixing blocks with and without families (e.g. volume cells without
+  `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
+  Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
+  families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
+  (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
+  readers share the same cell reading code.
 - OpenFOAM reader: binary `faces` files as OpenFOAM writes them (`faceCompactList`)
   are now read; they failed with a `ValueError`.
 

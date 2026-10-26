@@ -14,7 +14,7 @@ import numpy as np
 from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
-from .._mesh import Mesh
+from .._mesh import Mesh, topological_dimension
 
 # ----- Ansys type <-> meshlane type mappings -----
 _FAMILY = {}
@@ -45,6 +45,19 @@ _FROM_MESHIO = {
     "triangle": 181, "triangle6": 281, "quad": 181, "quad8": 281,
     "line": 188, "line3": 189,
 }
+
+# 2D (plane) model: surface elements become PLANE182 (linear) / PLANE183 (quadratic),
+# not shells. The 1D blocks are boundary edges that carry boundary conditions, not
+# structural members of the analysis, so write() keeps their groups as node components
+# instead of writing the edges as elements.
+_FROM_MESHIO_PLANE = {
+    "triangle": 182, "triangle6": 183,
+    "quad": 182, "quad8": 183,
+}
+
+# PLANE183 KEYOPT(1) sets the shape: 1 = 6-node triangle, 0 = 8-node quad. Without
+# it ANSYS assumes the quad form and the element won't initialize.
+_PLANE183_KEYOPT1 = {"triangle6": 1, "quad8": 0}
 
 # ANSYS contact/target elements (TARGE169/170, CONTA171-178) overlay the solid
 # faces and read as flat, zero-volume solids, so they are skipped.
@@ -120,6 +133,17 @@ def _resolve_int(tok, params):
         return int(float(tok))
     except ValueError:
         return params.get(tok.upper())
+
+
+def _resolve_etype(tok, params):
+    # The type token of an ET command may be the numeric type (e.g. "183"), a
+    # *SET parameter, or the ANSYS element NAME (e.g. "PLANE183", "SOLID185").
+    # Element names are <letters><number>, so fall back to the trailing number.
+    v = _resolve_int(tok, params)
+    if v is not None:
+        return v
+    m = re.search(r"(\d+)\s*$", tok.split("!")[0].strip())
+    return int(m.group(1)) if m else None
 
 
 def _slice_ints(line, width):
@@ -213,7 +237,7 @@ def _read_lines(lines):
             p = line.split(",")
             if len(p) >= 3:
                 tid = _resolve_int(p[1], params)
-                num = _resolve_int(p[2], params)
+                num = _resolve_etype(p[2], params)
                 if tid is not None and num is not None:
                     etype_lib[tid] = num
             i += 1
@@ -380,20 +404,37 @@ def _resolve_type(ansys_num, nodes):
     return _TO_MESHIO[key], nodes
 
 
+def _is_plane_model(families, points):
+    # True when the mesh is a 2D plane model, so it can be returned with 2D points
+    # (and later re-exported as PLANE rather than shell/solid). Requires plane-family
+    # elements, no solid or shell (boundary lines are fine), and all nodes flat in z.
+    if "plane" not in families or (families & {"solid", "shell"}):
+        return False
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) == 0:
+        return False
+    scale = float(np.ptp(points[:, :2])) if points.size else 0.0
+    return bool(np.all(np.abs(points[:, 2]) <= 1e-9 + 1e-6 * scale))
+
+
 def _build_mesh(etype_lib, node_id, coords, elements, node_comps, elem_comps):
     points = np.array(coords, dtype=float)
     nid_to_index = {nid: k for k, nid in enumerate(node_id)}
     blocks, eid_to_loc = {}, {}
+    families = set()
     for etype_local, elem_id, nodes in elements:
         ansys_num = etype_lib.get(etype_local)
         if ansys_num in _CONTACT:
             continue  # drop ANSYS contact/target overlays (see _CONTACT)
+        families.add(_FAMILY.get(ansys_num, "solid"))
         mtype, nodes = _resolve_type(ansys_num, nodes)
         blocks.setdefault(mtype, [])
         eid_to_loc[elem_id] = (mtype, len(blocks[mtype]))
         blocks[mtype].append([nid_to_index[x] for x in nodes])
     cells = [(t, np.array(c, dtype=int)) for t, c in blocks.items()]
     order = [t for t, _ in cells]
+
+    if _is_plane_model(families, points):
+        points = points[:, :2]
 
     point_sets = {
         name: np.array([nid_to_index[x] for x in ids if x in nid_to_index], dtype=int)
@@ -413,30 +454,45 @@ def _build_mesh(etype_lib, node_id, coords, elements, node_comps, elem_comps):
 # Write: ET/ETBLOCK and NBLOCK blocks are written first, then EBLOCK, then CMBLOCK.
 def write(filename, mesh):
     pts = mesh.points
-    if pts.shape[1] == 2:
+    is_2d = pts.shape[1] == 2
+    if is_2d:
         pts = np.column_stack([pts, np.zeros(len(pts))])
 
+    # 2D model: only surface blocks become PLANE elements; 0D/1D blocks are set
+    # aside (by original index) so their groups become node components below.
+    # 3D: write every block (historic behavior).
+    emap = _FROM_MESHIO_PLANE if is_2d else _FROM_MESHIO
+    kept, dropped = [], []  # each: (original_block_index, CellBlock)
+    for bi, b in enumerate(mesh.cells):
+        is_surface = (not is_2d) or topological_dimension.get(b.type, 3) == 2
+        if is_surface:
+            if b.type not in emap:
+                raise WriteError(f"Unhandled meshlane type: {b.type}")
+            kept.append((bi, b))
+        else:
+            dropped.append((bi, b))
+
     type_slot = {}
-    for b in mesh.cells:
-        if b.type not in _FROM_MESHIO:
-            raise WriteError(f"Unhandled meshlane type: {b.type}")
+    for _, b in kept:
         type_slot.setdefault(b.type, len(type_slot) + 1)
 
     with open_file(filename, "w") as f:
         f.write("/PREP7\n")
         for t, slot in type_slot.items():
-            f.write(f"ET,{slot},{_FROM_MESHIO[t]}\n")
+            f.write(f"ET,{slot},{emap[t]}\n")
+            if emap[t] == 183:
+                f.write(f"KEYOPT,{slot},1,{_PLANE183_KEYOPT1[t]}\n")
         nn = len(pts)
         f.write(f"NBLOCK,6,SOLID,{nn},{nn}\n(3i9,6e20.13)\n")
         for k, (x, y, z) in enumerate(pts):
             f.write(f"{k+1:9d}{0:9d}{0:9d}" + "% .13E% .13E% .13E" % (x, y, z) + "\n")
         f.write("N,R5.3,LOC,      -1,\n")
 
-        ntot = sum(len(b.data) for b in mesh.cells)
+        ntot = sum(len(b.data) for _, b in kept)
         f.write(f"EBLOCK,19,SOLID,{ntot},{ntot}\n(19i9)\n")
         eid = 0
-        loc_to_eid = {}
-        for bi, b in enumerate(mesh.cells):
+        loc_to_eid = {}  # (original_block_index, local_index) -> element id
+        for bi, b in kept:
             slot = type_slot[b.type]
             for li, conn in enumerate(b.data):
                 eid += 1
@@ -448,16 +504,35 @@ def write(filename, mesh):
                     f.write("".join(f"{v:9d}" for v in nodes[8:]) + "\n")
         f.write(f"{-1:9d}\n")
 
+        # dropped (boundary) block connectivity, by original index, for node components
+        dropped_conn = {bi: b.data for bi, b in dropped}
+
         for name, ids in mesh.point_sets.items():
             vals = [int(x) + 1 for x in ids]
             f.write(f"CMBLOCK,{name},NODE,{len(vals):9d}\n(8i10)\n")
             _write_items(f, vals)
         for name, blocks in mesh.cell_sets.items():
-            vals = sorted(loc_to_eid[(bi, int(li))]
-                          for bi, arr in enumerate(blocks)
-                          for li in np.asarray(arr).tolist())
-            f.write(f"CMBLOCK,{name},ELEM,{len(vals):9d}\n(8i10)\n")
-            _write_items(f, vals)
+            elem_vals = sorted(
+                loc_to_eid[(bi, int(li))]
+                for bi, arr in enumerate(blocks)
+                for li in np.asarray(arr).tolist()
+                if (bi, int(li)) in loc_to_eid
+            )
+            if elem_vals:
+                # group with real elements -> element component
+                f.write(f"CMBLOCK,{name},ELEM,{len(elem_vals):9d}\n(8i10)\n")
+                _write_items(f, elem_vals)
+                continue
+            # pure boundary group -> node component
+            node_vals = set()
+            for bi, arr in enumerate(blocks):
+                if bi in dropped_conn:
+                    for li in np.asarray(arr).tolist():
+                        node_vals.update(int(x) + 1 for x in dropped_conn[bi][int(li)])
+            if node_vals:
+                nv = sorted(node_vals)
+                f.write(f"CMBLOCK,{name},NODE,{len(nv):9d}\n(8i10)\n")
+                _write_items(f, nv)
         f.write("FINISH\n")
 
 
