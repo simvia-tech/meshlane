@@ -54,6 +54,10 @@ and writes all of the following and converts smoothly between them:
 
 - **OpenFOAM polyMesh reader**: ASCII and binary, arbitrary cell types (tri / quad / polyhedra).
 - **Ansys/APDL** `.inp` / `.cdb` reader & writer for FEA interoperability.
+- **CGNS** reader & writer (HDF5 files): unstructured and structured zones, linear
+  and quadratic elements, MIXED sections and polyhedra (NGON_n/NFACE_n); boundary
+  conditions and families as groups, flow solutions as point/cell data. Written files
+  pass `cgnscheck`; `meshlane.cgns.read_multi`/`write_multi` keep one mesh per zone.
 - **OpenVolumeMesh** `.ovm` reader & writer (tetra, pyramid, wedge and hexahedron
   cells), e.g. to convert the output of the [AlgoHex](https://github.com/cgg-bern/AlgoHex)
   hexahedral mesher.

@@ -14,6 +14,14 @@ top; the meshio history follows below.
   once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
   Properties are skipped on reading, and point/cell data are not written. (#7)
 
+### Fixed
+- MED: files mixing blocks with and without families (e.g. volume cells without
+  `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
+  Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
+  families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
+  (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
+  readers share the same cell reading code.
+
 ## meshlane 5.5.0 (Aug 24, 2026)
 
 ### Added
