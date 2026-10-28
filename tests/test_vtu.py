@@ -1,9 +1,12 @@
+import base64
 import pathlib
+import struct
 
 import numpy as np
 import pytest
 
 import meshlane
+from meshlane.vtu._vtu import VtuReader
 
 from . import helpers
 
@@ -47,7 +50,9 @@ def test(mesh, data_type, tmp_path):
     binary, compression = data_type
 
     def writer(*args, **kwargs):
-        return meshlane.vtu.write(*args, binary=binary, compression=compression, **kwargs)
+        return meshlane.vtu.write(
+            *args, binary=binary, compression=compression, **kwargs
+        )
 
     # ASCII files are only meant for debugging, VTK stores only 11 digits
     # <https://gitlab.kitware.com/vtk/vtk/-/issues/17038#note_264052>
@@ -78,3 +83,30 @@ def test_read_from_file(filename, ref_cells, ref_num_cells, ref_num_pnt):
     assert ref_cells == mesh.cells[0].type
     assert len(mesh.cells[0].data) == ref_num_cells
     assert len(mesh.points) == ref_num_pnt
+
+
+@pytest.mark.parametrize("header_type, code", [("UInt32", "I"), ("UInt64", "Q")])
+@pytest.mark.parametrize(
+    "byte_order, prefix", [("LittleEndian", "<"), ("BigEndian", ">")]
+)
+@pytest.mark.parametrize("separate_header", [False, True])
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 4, 5])
+def test_appended_array_boundaries(
+    header_type, code, byte_order, prefix, separate_header, count
+):
+    reader = VtuReader.__new__(VtuReader)
+    reader.header_type = header_type
+    reader.byte_order = byte_order
+    expected = np.arange(count, dtype=np.uint8)
+    header = struct.pack(prefix + code, count)
+    if separate_header:
+        encoded = base64.b64encode(header) + base64.b64encode(expected.tobytes())
+    else:
+        encoded = base64.b64encode(header + expected.tobytes())
+    # A later independently encoded array must not be decoded with this one.
+    following = base64.b64encode(struct.pack(prefix + code, 1) + b"\xff")
+    data = (encoded + following).decode()
+    if count == 5:
+        data = " \n".join(data[index : index + 5] for index in range(0, len(data), 5))
+    actual = reader.read_uncompressed_binary(data, np.dtype(np.uint8))
+    np.testing.assert_array_equal(actual, expected)
