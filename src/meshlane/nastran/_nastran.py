@@ -101,13 +101,11 @@ def read_buffer(f):
         if len(cells) > 0 and cells[-1][0] == cell_type:
             cells[-1][1].append(cell)
             cells_id[-1].append(cell_id)
-            if cell_ref is not None:
-                cell_refs[-1].append(cell_ref)
+            cell_refs[-1].append(cell_ref)
         else:
             cells.append((cell_type, [cell]))
             cells_id.append([cell_id])
-            if cell_ref is not None:
-                cell_refs.append([cell_ref])
+            cell_refs.append([cell_ref])
 
     while True:
         next_line = f.readline()
@@ -218,8 +216,7 @@ def read_buffer(f):
         if keyword in ["GRID", "GRID*"]:
             point_id = int(chunks[1])
             pref = chunks[2].strip()
-            if len(pref) > 0:
-                point_refs.append(int(pref))
+            point_refs.append(int(pref) if pref else 0)
             points_id.append(point_id)
             points.append([_nastran_string_to_float(i) for i in chunks[3:6]])
 
@@ -227,7 +224,7 @@ def read_buffer(f):
         elif keyword in nastran_to_meshio_type:
             cell_id = int(chunks[1])
             cell_ref = chunks[2].strip()
-            cell_ref = int(cell_ref) if len(cell_ref) > 0 else None
+            cell_ref = int(cell_ref) if cell_ref else cell_id
 
             if keyword in ["CBAR", "CBEAM", "CBUSH", "CBUSH1D", "CGAP"]:
                 # Most Nastran 1D elements contain a third node (in the form of a node id or coordinates) to specify the local coordinate system:
