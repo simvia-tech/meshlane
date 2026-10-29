@@ -6,13 +6,25 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
-## Unreleased
+## meshlane 5.6.0 (Oct 29, 2026)
 
 ### Added
+- CGNS reader and writer, rewritten (HDF5 files). Reads both unstructured and
+  structured zones. meshlane has no structured representation, so a structured zone is
+  destructured on read: its i/j/k grid becomes unstructured hexahedron, quad or line
+  cells (with a warning). Linear and quadratic elements, MIXED sections and polyhedra
+  (NGON_n/NFACE_n) are supported; boundary conditions and families become groups, and
+  flow solutions become point/cell data. The writer emits unstructured CGNS that passes
+  `cgnscheck`. `meshlane.cgns.read_multi` / `write_multi` read and write multi-zone
+  files, one mesh per zone. (#49)
+- Ansys Fluent `.msh` and `.msh.h5` (HDF5) reader and writer: the reader rebuilds the
+  volume cells from the faces (tetra, pyramid, wedge, hexahedron, polyhedra; triangles,
+  quads and polygons in 2D), ASCII and binary, with the named zones as groups; the
+  writer produces the face-based layout Fluent reads, binary or ASCII. (#48)
 - OpenVolumeMesh `.ovm` (ASCII) reader and writer. Tetrahedra, pyramids, wedges and
   hexahedra are rebuilt from the half-face topology; shared edges and faces are written
   once, with half-face normals pointing into the cells as OpenVolumeMesh expects.
-  Properties are skipped on reading, and point/cell data are not written. (#7)
+  Properties are skipped on reading, and point/cell data are not written. (#7, #40)
 - OpenFOAM polyMesh writer, ASCII or binary (`binary=True`, or `meshlane binary
   case/case.foam`). Writing `case/case.foam` produces
   `case/constant/polyMesh`; faces are built and matched with numpy, oriented from owner
@@ -21,33 +33,47 @@ top; the meshio history follows below.
   go to `defaultFaces`. Quadratic cells are written with their corner nodes, and unused
   points are dropped. Files a previous mesh left in `polyMesh` (zones, sets,
   refinement levels) are moved to `polyMesh.orig`. The reader now keeps the patch
-  types in `mesh.patch_types`. (#8)
+  types in `mesh.patch_types`. (#8, #42)
+- gmsh: the missing wedge18 (prism18) node ordering, so quadratic prisms read and
+  write correctly; the reverse table is now derived from the forward one so the two
+  cannot drift. (#27, #28)
+
+### Changed
+- **Breaking:** `.msh` files are now written as **Gmsh** by default. Previously a mesh
+  without Gmsh/MED-specific data written to `.msh` produced an Ansys Fluent file. To
+  write Fluent, pass `file_format="ansys"` (CLI: `--output-format ansys`). Reading is
+  unaffected. (#48)
 
 ### Fixed
+- Ansys/APDL (`ansysInp`, `.cdb`): 2D plane meshes keep their type and dimension. The
+  writer emits surface elements as PLANE182/PLANE183 (with `KEYOPT(1)` so triangles
+  initialize) and writes boundary groups as node components instead of BEAM189 beams;
+  the reader returns 2D points for plane element types. A 2D plane-stress mesh converted
+  `.med` to `.cdb` (and back) no longer becomes 3D SHELL281/SOLID185/BEAM189. (#37, #47)
 - MED: files mixing blocks with and without families (e.g. volume cells without
   `FAM` and boundary faces with groups, as in snappyHexMesh meshes exported from
   Salome) no longer fail with `Incompatible cell data 'cell_tags'`; blocks without
   families get family 0. The multi-mesh reader used by the CLI now reads polyhedra
   (`POE`) like `meshlane.read`, instead of failing with `KeyError: 'POE'`. Both
-  readers share the same cell reading code.
+  readers share the same cell reading code. (#41)
 - OpenFOAM reader: binary `faces` files as OpenFOAM writes them (`faceCompactList`)
-  are now read; they failed with a `ValueError`.
+  are now read; they failed with a `ValueError`. (#42)
 - SU2: writing a mesh with boundary elements no longer fails with `cannot unpack
   non-iterable CellBlock object`. Marker names are kept: the reader stores them in
   `cell_sets` (and still in `cell_data["su2:tag"]`), the writer takes them from
   `cell_sets`, the MED/OpenFOAM `cell_tags` families or the first integer cell data.
   2D meshes with z = 0 coordinates are written as `NDIME= 2`. Files with Windows line
-  endings or spaces around `=` are read. Reading and writing are vectorized.
+  endings or spaces around `=` are read. Reading and writing are vectorized. (#44)
 - SU2: multi-zone files (`NZONE`/`IZONE`) are read and written as a list of meshes with
   `meshlane.su2.read_multi` / `write_multi`, like multi-mesh MED files; they used to
   give a corrupted mesh. `meshlane convert` and `meshlane info` handle them, e.g.
-  `meshlane convert cht.su2 cht.med` (one MED mesh per zone) and back.
+  `meshlane convert cht.su2 cht.med` (one MED mesh per zone) and back. (#44)
 - SU2: the sections after the markers (periodicity, FFD boxes used by shape
   optimization) are kept in `mesh.su2_extra` and written back unchanged, instead of
   producing one warning per line and being lost. Quadratic cells are written with their
   corner nodes instead of being dropped; unused points are removed; cells that are
   neither domain nor boundary elements, and groups merged by marker name cleaning, are
-  reported.
+  reported. (#44)
 
 ## meshlane 5.5.0 (Aug 24, 2026)
 
