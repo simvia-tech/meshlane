@@ -16,6 +16,50 @@ from .._helpers import register_format
 from .._mesh import Mesh
 from ._medit_internal import medit_codes
 
+DICT_MESHLANE: dict[str, tuple[str, int, int]] = {
+    # "vertex": ("Corners", 0, 13), # DOT NOT UNCOMMENT
+    # wrong data for GmfCorners in medit_codes?
+    "point": ("Vertices", 0, 4),
+    "line": ("Edges", 2, 5),
+    "line3": ("EdgesP2", 3, 25),
+    "line4": ("EdgesP3", 4, 92),
+    "line5": ("EdgesP4", 5, 93),
+    "triangle": ("Triangles", 3, 6),
+    "triangle6": ("TrianglesP2", 6, 24),
+    "triangle10": ("TrianglesP3", 10, 90),
+    "triangle15": ("TrianglesP4", 15, 91),
+    "quad": ("Quadrilaterals", 4, 7),
+    # "quad8": (_, 8, _), # not on medit!
+    "quad9": ("QuadrilateralsQ2", 9, 27),
+    "tetra": ("Tetrahedra", 4, 8),
+    "tetra10": ("TetrahedraP2", 10, 30),
+    "wedge": ("Prisms", 6, 9),
+    # "wedge15": (_, 15, _), # not on medit!
+    "wedge18": ("PrismsP2", 18, 86),
+    "pyramid": ("Pyramids", 5, 49),
+    "pyramid14": ("PyramidsP2", 14, 87),
+    "hexahedron": ("Hexahedra", 8, 10),  # Frey
+    # "hexahedron20": (_, 20, _), # not on medit!
+    "hexahedron27": ("HexahedraQ2", 27, 33),
+}
+"""meshlane: (medit, nodes_per_elements, tag)"""
+# see _medit_internal.py for tags
+
+DICT_MEDIT: dict[str, tuple[str, int, int]] = {}
+"""medit: (meshlane, nodes_per_elements, tag)"""
+
+DICT_GMFMEDIT: dict[str, tuple[str, int, int]] = {}
+"""GmfMedit: (meshlane, nodes_per_elements, tag)"""
+
+for key, value in DICT_MESHLANE.items():
+    medit, nPe, tag = value
+    DICT_MEDIT[medit] = (key, nPe, tag)
+    DICT_GMFMEDIT["Gmf" + medit] = (key, nPe, tag)
+
+# add Dobrzynski case
+DICT_MEDIT["Hexaedra"] = ("hexahedron", 8, 10)
+DICT_GMFMEDIT["GmfHexaedra"] = ("hexahedron", 8, 10)
+
 
 def read(filename):
     with open_file(filename) as f:
@@ -50,18 +94,43 @@ def _produce_dtype(string_type, dim, itype, ftype):
     return res
 
 
-def read_binary_buffer(f):
+# Node order vs. medit's HexahedraQ2, checked against ViZiR4's HexQ2.mesh.
+_medit_to_meshlane = {
+    "hexahedron27": [*list(range(20)), 25, 23, 22, 24, 20, 21, 26],
+    # Node order vs. medit's PyramidsP2, checked against ViZiR4's pyramid_p2.mesh.
+    "pyramid14": [0, 1, 2, 3, 4, 5, 8, 9, 6, 10, 7, 11, 12, 13],
+}
 
-    meshio_from_medit = {
-        "GmfVertices": ("point", None),
-        "GmfEdges": ("line", 2),
-        "GmfTriangles": ("triangle", 3),
-        "GmfQuadrilaterals": ("quad", 4),
-        "GmfTetrahedra": ("tetra", 4),
-        "GmfPrisms": ("wedge", 6),
-        "GmfPyramids": ("pyramid", 5),
-        "GmfHexahedra": ("hexahedron", 8),
-    }
+_meshlane_to_medit = {
+    cell_type: [order.index(i) for i in range(len(order))]
+    for cell_type, order in _medit_to_meshlane.items()
+}
+
+
+def _convert_cell_data(
+    cell_type: str, data, dict_convert: dict[str, list[int]]
+) -> np.ndarray:
+
+    if cell_type in dict_convert.keys():
+        idx = dict_convert[cell_type]
+        data = data[:, idx]
+
+    return data
+
+
+def _convert_cells(
+    cells: list[tuple[str, np.ndarray]], dict_convert: dict[str, list[int]]
+):
+
+    for i, cell in enumerate(cells):
+        cell_type, data = cell
+        data = _convert_cell_data(cell_type, data, dict_convert)
+        cells[i] = (cell_type, data)
+
+    return cells
+
+
+def read_binary_buffer(f):
 
     dim = 0
     points = None
@@ -150,7 +219,7 @@ def read_binary_buffer(f):
         field_template = field_code[2]
         dtype = np.dtype(_produce_dtype(field_template, dim, itype, ftype))
         out = np.asarray(np.fromfile(f, count=nitems, dtype=dtype))
-        if field_code[0] not in meshio_from_medit.keys():
+        if field_code[0] not in DICT_GMFMEDIT.keys():
             warn(f"meshlane doesn't know {field_code[0]} type. Skipping.")
             continue
 
@@ -158,12 +227,14 @@ def read_binary_buffer(f):
             points = out["f0"]
             point_data["medit:ref"] = out["f1"]
         else:
-            meshio_type, ncols = meshio_from_medit[field_code[0]]
+            meshlane_type, ncols, _ = DICT_GMFMEDIT[field_code[0]]
             # transform the structured array to integer array which suffices
             # for the cell connectivity
             out_view = out.view(itype).reshape(nitems, ncols + 1)
-            cells.append((meshio_type, out_view[:, :ncols] - 1))
+            cells.append((meshlane_type, out_view[:, :ncols] - 1))
             cell_data["medit:ref"].append(out_view[:, -1])
+
+    cells = _convert_cells(cells, _medit_to_meshlane)
 
     return Mesh(points, cells, point_data=point_data, cell_data=cell_data)
 
@@ -174,16 +245,6 @@ def read_ascii_buffer(f):
     point_data = {}
     cell_data = {"medit:ref": []}
 
-    meshio_from_medit = {
-        "Edges": ("line", 2),
-        "Triangles": ("triangle", 3),
-        "Quadrilaterals": ("quad", 4),
-        "Tetrahedra": ("tetra", 4),
-        "Prisms": ("wedge", 6),
-        "Pyramids": ("pyramid", 5),
-        "Hexahedra": ("hexahedron", 8),  # Frey
-        "Hexaedra": ("hexahedron", 8),  # Dobrzynski
-    }
     points = None
     dtype = None
 
@@ -199,12 +260,14 @@ def read_ascii_buffer(f):
 
         items = line.split()
 
-        if not items[0].isalpha():
-            raise ReadError()
+        # keywords may contain digits (TrianglesP2, HexahedraQ2); anything not starting
+        # with a letter means the section above was read with the wrong cell size
+        if not items[0][0].isalpha():
+            raise ReadError(f"Expected a keyword, got {items[0]!r}.")
 
         if items[0] == "MeshVersionFormatted":
             version = items[1]
-            dtype = {"0": c_float, "1": c_float, "2": c_double}[version]
+            dtype = {"0": c_float, "1": c_float, "2": c_double, "3": c_double}[version]
         elif items[0] == "Dimension":
             if len(items) >= 2:
                 dim = int(items[1])
@@ -223,8 +286,8 @@ def read_ascii_buffer(f):
             ).reshape(num_verts, dim + 1)
             points = out[:, :dim]
             point_data["medit:ref"] = out[:, dim].astype(int)
-        elif items[0] in meshio_from_medit:
-            meshio_type, points_per_cell = meshio_from_medit[items[0]]
+        elif items[0] in DICT_MEDIT:
+            meshlane_type, points_per_cell, _ = DICT_MEDIT[items[0]]
             # The first value is the number of elements
             num_cells = int(f.readline())
 
@@ -233,7 +296,7 @@ def read_ascii_buffer(f):
             ).reshape(num_cells, points_per_cell + 1)
 
             # adapt for 0-base
-            cells.append((meshio_type, out[:, :points_per_cell] - 1))
+            cells.append((meshlane_type, out[:, :points_per_cell] - 1))
             cell_data["medit:ref"].append(out[:, -1])
         elif items[0] == "Corners":
             # those are just discarded
@@ -257,6 +320,12 @@ def read_ascii_buffer(f):
             np.fromfile(
                 f, count=num_sub_domain_from_mesh * 4, dtype=int, sep=" "
             ).reshape(num_sub_domain_from_mesh, 4)
+        elif items[0] == "SubDomainFromGeom":
+            # those are just discarded
+            num_sub_domain_from_geom = int(f.readline())
+            np.fromfile(
+                f, count=num_sub_domain_from_geom * 4, dtype=int, sep=" "
+            ).reshape(num_sub_domain_from_geom, 4)
         elif items[0] == "VertexOnGeometricVertex":
             # those are just discarded
             num_vertex_on_geometric_vertex = int(f.readline())
@@ -277,23 +346,26 @@ def read_ascii_buffer(f):
             ).reshape(num_edge_on_geometric_edge, 2)
         elif items[0] == "Identifier" or items[0] == "Geometry":
             f.readline()
-        elif items[0] in [
+        elif items[0].endswith("Ordering") or items[0] in [
             "RequiredVertices",
             "TangentAtVertices",
             "Tangents",
             "Ridges",
         ]:
-            msg = f"Meshio doesn't know keyword {items[0]}. Skipping."
+            msg = f"meshlane doesn't know keyword {items[0]}. Skipping."
             warn(msg)
             num_to_pass = int(f.readline())
             for _ in range(num_to_pass):
                 f.readline()
         else:
-            if items[0] != "End":
+            if items[0] not in ("End", "END"):
                 raise ReadError(f"Unknown keyword '{items[0]}'.")
 
     if points is None:
         raise ReadError("Expected `Vertices`")
+
+    cells = _convert_cells(cells, _medit_to_meshlane)
+
     return Mesh(points, cells, point_data=point_data, cell_data=cell_data)
 
 
@@ -332,16 +404,6 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
         for x, label in zip(mesh.points, labels):
             fh.write(fmt.format(*x, label).encode())
 
-        medit_from_meshio = {
-            "line": ("Edges", 2),
-            "triangle": ("Triangles", 3),
-            "quad": ("Quadrilaterals", 4),
-            "tetra": ("Tetrahedra", 4),
-            "wedge": ("Prisms", 6),
-            "pyramid": ("Pyramids", 5),
-            "hexahedron": ("Hexahedra", 8),
-        }
-
         # pick out cell_data
         labels_key, other = _pick_first_int_data(mesh.cell_data)
         if labels_key and other:
@@ -352,10 +414,13 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
             )
 
         for k, cell_block in enumerate(mesh.cells):
+
             cell_type = cell_block.type
             data = cell_block.data
+            data = _convert_cell_data(cell_type, data, _meshlane_to_medit)
+
             try:
-                medit_name, num = medit_from_meshio[cell_type]
+                medit_name, num, _ = DICT_MESHLANE[cell_type]
             except KeyError:
                 msg = f"MEDIT's mesh format doesn't know {cell_type} cells. Skipping."
                 warn(msg)
@@ -464,19 +529,15 @@ def write_binary_file(f, mesh):
                 f"Picking {labels_key}, skipping {string}."
             )
 
-        # first component is medit keyword id see _medit_internal.py
-        medit_from_meshio = {
-            "line": 5,
-            "triangle": 6,
-            "quad": 7,
-            "tetra": 8,
-            "wedge": 9,
-            "pyramid": 49,
-            "hexahedron": 10,
-        }
         for k, cell_block in enumerate(mesh.cells):
+
+            # reorder data (into a local: the caller's mesh must not be modified)
+            data = _convert_cell_data(
+                cell_block.type, cell_block.data, _meshlane_to_medit
+            )
+
             try:
-                medit_key = medit_from_meshio[cell_block.type]
+                _, _, medit_key = DICT_MESHLANE[cell_block.type]
             except KeyError:
                 warn(
                     f"MEDIT's mesh format doesn't know {cell_block.type} cells. "
@@ -484,7 +545,7 @@ def write_binary_file(f, mesh):
                 )
                 continue
 
-            num_cells, num_verts = cell_block.data.shape
+            num_cells, num_verts = data.shape
 
             pos += num_cells * (num_verts + 1) * itype_size
             pos += keyword_size + postype_size + itype_size
@@ -500,7 +561,7 @@ def write_binary_file(f, mesh):
             labels = (
                 mesh.cell_data[labels_key][k]
                 if labels_key
-                else np.ones(len(cell_block.data), dtype=cell_block.data.dtype)
+                else np.ones(len(data), dtype=data.dtype)
             )
             field_template = medit_codes[medit_key][2]
             dtype = np.dtype(_produce_dtype(field_template, dim, itype, ftype))
@@ -508,7 +569,7 @@ def write_binary_file(f, mesh):
             tmp_array = np.empty(num_cells, dtype=dtype)
             i = 0
             for col_type in dtype.names[:-1]:
-                tmp_array[col_type] = cell_block.data[:, i] + 1
+                tmp_array[col_type] = data[:, i] + 1
                 i += 1
 
             tmp_array[dtype.names[-1]] = labels
