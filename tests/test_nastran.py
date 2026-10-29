@@ -67,3 +67,21 @@ def test_long_format():
     # points
     assert len(mesh.points) == 1
     assert np.isclose(mesh.points.sum(), 1.5)
+
+
+@pytest.mark.parametrize(
+    "filename,reference",
+    [
+        ("quad4_extradata.bdf", 40),
+        ("quad8_extradata.bdf", 192),
+        ("tria3_extradata.bdf", 61),
+        ("tria6_extradata.bdf", 315),
+    ],
+)
+def test_read_2dcell_with_extra(filename, reference):
+    this_dir = pathlib.Path(__file__).resolve().parent
+    filename = this_dir / "meshes" / "nastran" / filename
+
+    mesh = meshlane.read(filename)
+    # check sum of points ids of all cells  
+    assert np.allclose(mesh.cells[0].data.sum(), reference)

@@ -239,6 +239,15 @@ def read_buffer(f):
                 # where the last three floats specify the orientation vector.
                 # This information is removed.
                 cell = chunks[3:5]
+            # separation of point identifiers from extra data
+            elif keyword ==  "CQUAD4":
+                cell = chunks[3:7]
+            elif keyword ==  "CQUAD8":
+                cell = chunks[3:11]
+            elif keyword ==  "CTRIA3":
+                cell = chunks[3:6]
+            elif keyword ==  "CTRIA6":
+                cell = chunks[3:9]
             else:
                 cell = chunks[3:]
 
