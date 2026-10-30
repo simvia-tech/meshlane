@@ -48,6 +48,63 @@ def test_generic_io(tmp_path):
     helpers.generic_io(tmp_path / "test.0.lb8.ugrid")
 
 
+@pytest.mark.parametrize(
+    "extension",
+    [
+        ".ugrid",
+        ".b8.ugrid",
+        ".b4.ugrid",
+        ".lb8.ugrid",
+        ".lb4.ugrid",
+        ".b8l.ugrid",
+        ".lb8l.ugrid",
+        ".r8.ugrid",
+        ".r4.ugrid",
+        ".lr8.ugrid",
+        ".lr4.ugrid",
+    ],
+)
+@pytest.mark.parametrize("column", [False, True])
+@pytest.mark.parametrize(
+    "cell_types",
+    [
+        ["triangle"],
+        ["quad"],
+        ["triangle", "quad", "tetra"],
+        ["tetra", "quad", "triangle"],
+    ],
+)
+def test_write_boundary_labels(tmp_path, extension, column, cell_types):
+    connectivity = {
+        "triangle": [[0, 1, 2], [0, 2, 3]],
+        "quad": [[0, 1, 2, 3]],
+        "tetra": [[0, 1, 2, 4]],
+    }
+    labels = {
+        "triangle": np.array([11, 12], dtype=np.int32),
+        "quad": np.array([21], dtype=np.int32),
+        "tetra": np.array([0], dtype=np.int32),
+    }
+    values = [labels[key][:, None] if column else labels[key] for key in cell_types]
+    mesh = meshlane.Mesh(
+        helpers.tet_mesh.points,
+        [(key, connectivity[key]) for key in cell_types],
+        cell_data={"ugrid:ref": values},
+    )
+    path = tmp_path / ("labels" + extension)
+
+    meshlane.write(path, mesh)
+    result = meshlane.read(path)
+
+    assert {block.type for block in result.cells} == set(cell_types)
+    for block, actual in zip(result.cells, result.cell_data["ugrid:ref"]):
+        np.testing.assert_array_equal(block.data, connectivity[block.type])
+        np.testing.assert_array_equal(actual, labels[block.type])
+    for key, actual in zip(cell_types, mesh.cell_data["ugrid:ref"]):
+        expected = labels[key][:, None] if column else labels[key]
+        np.testing.assert_array_equal(actual, expected)
+
+
 # sphere_mixed.1.lb8.ugrid and hch_strct.4.lb8.ugrid created
 # using the codes from http://cfdbooks.com
 @pytest.mark.parametrize(

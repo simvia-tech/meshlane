@@ -255,7 +255,7 @@ def _write_buffer(f, file_type, mesh):
                 f'Picking {labels_key}, skipping {", ".join(other)}.'
             )
         labels = (
-            mesh.cell_data[labels_key]
+            mesh.cell_data[labels_key][ugrid_meshio_id[key]]
             if labels_key
             else np.ones(ugrid_counts[key], dtype=int)
         )
