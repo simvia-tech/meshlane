@@ -11,6 +11,7 @@ from .._common import cell_data_from_raw, num_nodes_per_cell, raw_from_cell_data
 from .._exceptions import ReadError, WriteError
 from .._mesh import CellBlock, Mesh
 from .common import (
+    _align_data,
     _fast_forward_over_blank_lines,
     _fast_forward_to_end_block,
     _gmsh_to_meshio_order,
@@ -67,7 +68,7 @@ def read_buffer(f, is_ascii: bool, data_size):
         elif environ == "Nodes":
             points, point_tags, point_entities = _read_nodes(f, is_ascii, data_size)
         elif environ == "Elements":
-            cells, cell_tags, cell_sets = _read_elements(
+            cells, cell_tags, cell_sets, element_tags = _read_elements(
                 f,
                 point_tags,
                 physical_tags,
@@ -95,6 +96,8 @@ def read_buffer(f, is_ascii: bool, data_size):
 
     if cells is None:
         raise ReadError("$Element section not found.")
+    _align_data(point_data, point_tags + 1)
+    _align_data(cell_data_raw, element_tags)
     cell_data = cell_data_from_raw(cells, cell_data_raw)
     cell_data.update(cell_tags)
 
@@ -242,7 +245,12 @@ def _read_elements(
     inv_tags = np.full(np.max(point_tags) + 1, -1, dtype=int)
     inv_tags[point_tags] = np.arange(len(point_tags))
 
-    # Note that the first column in the data array is the element tag; discard it.
+    element_tags = (
+        np.concatenate([d[:, 0] for _, _, _, _, d in data])
+        if data
+        else np.array([], dtype=int)
+    )
+    # The first column is the element tag; retain it for field-data alignment.
     data = [
         (physical_tag, bound_entity, geom_tag, tpe, inv_tags[d[:, 1:] - 1])
         for physical_tag, bound_entity, geom_tag, tpe, d in data
@@ -267,7 +275,7 @@ def _read_elements(
                 cell_sets["gmsh:bounding_entities"] = []
             cell_sets["gmsh:bounding_entities"].append(bound_entity)
 
-    return cells, cell_data, cell_sets
+    return cells, cell_data, cell_sets, element_tags
 
 
 def _read_periodic(f, is_ascii, data_size):

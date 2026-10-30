@@ -13,6 +13,7 @@ from .._common import cell_data_from_raw, num_nodes_per_cell, raw_from_cell_data
 from .._exceptions import ReadError
 from .._mesh import CellBlock, Mesh
 from .common import (
+    _align_data,
     _fast_forward_to_end_block,
     _gmsh_to_meshio_order,
     _gmsh_to_meshio_type,
@@ -55,7 +56,9 @@ def read_buffer(f, is_ascii: bool, data_size) -> Mesh:
         elif environ == "Nodes":
             points, point_tags = _read_nodes(f, is_ascii)
         elif environ == "Elements":
-            cells, cell_tags = _read_elements(f, point_tags, physical_tags, is_ascii)
+            cells, cell_tags, element_tags = _read_elements(
+                f, point_tags, physical_tags, is_ascii
+            )
         elif environ == "Periodic":
             periodic = _read_periodic(f, is_ascii)
         elif environ == "NodeData":
@@ -73,6 +76,8 @@ def read_buffer(f, is_ascii: bool, data_size) -> Mesh:
             # skip environment
             _fast_forward_to_end_block(f, environ)
 
+    _align_data(point_data, point_tags)
+    _align_data(cell_data_raw, element_tags)
     cell_data = cell_data_from_raw(cells, cell_data_raw)
     cell_data.update(cell_tags)
 
@@ -183,7 +188,12 @@ def _read_elements(f, point_tags, physical_tags, is_ascii):
     itags = -np.ones(m, dtype=int)
     itags[point_tags] = np.arange(len(point_tags))
 
-    # Note that the first column in the data array is the element tag; discard it.
+    element_tags = (
+        np.concatenate([d[:, 0] for _, _, _, d in data])
+        if data
+        else np.array([], dtype=int)
+    )
+    # The first column is the element tag; retain it for field-data alignment.
     data = [
         (physical_tag, geom_tag, tpe, itags[d[:, 1:]])
         for physical_tag, geom_tag, tpe, d in data
@@ -203,7 +213,7 @@ def _read_elements(f, point_tags, physical_tags, is_ascii):
             cell_data["gmsh:geometrical"] = []
         cell_data["gmsh:geometrical"].append(np.full(len(values), geom_tag, int))
 
-    return cells, cell_data
+    return cells, cell_data, element_tags
 
 
 def _read_periodic(f, is_ascii):
@@ -312,7 +322,7 @@ def _write_elements(fh, cell_blocks: list[CellBlock], binary: bool):
         total_num_cells = sum(len(cell_block) for cell_block in cell_blocks)
         np.array([len(cell_blocks), total_num_cells], dtype=c_ulong).tofile(fh)
 
-        consecutive_index = 0
+        consecutive_index = 1
         for cell_block in cell_blocks:
             node_idcs = _meshio_to_gmsh_order(cell_block.type, cell_block.data)
 
@@ -347,7 +357,7 @@ def _write_elements(fh, cell_blocks: list[CellBlock], binary: bool):
         total_num_cells = sum(len(cell_block) for cell_block in cell_blocks)
         fh.write(f"{len(cell_blocks)} {total_num_cells}\n".encode())
 
-        consecutive_index = 0
+        consecutive_index = 1
         for cell_block in cell_blocks:
             cell_type = cell_block.type
             cell_data = _meshio_to_gmsh_order(cell_block.type, cell_block.data)

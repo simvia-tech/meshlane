@@ -11,6 +11,7 @@ from .._common import cell_data_from_raw, num_nodes_per_cell, raw_from_cell_data
 from .._exceptions import ReadError
 from .._mesh import CellBlock, Mesh
 from .common import (
+    _align_data,
     _fast_forward_over_blank_lines,
     _fast_forward_to_end_block,
     _gmsh_to_meshio_order,
@@ -41,6 +42,7 @@ def read_buffer(f, is_ascii, data_size):
     periodic = None
     point_tags = None
     has_additional_tag_data = False
+    element_tags = []
     while True:
         # fast-forward over blank lines
         line, is_eof = _fast_forward_over_blank_lines(f)
@@ -57,7 +59,7 @@ def read_buffer(f, is_ascii, data_size):
         elif environ == "Nodes":
             points, point_tags = _read_nodes(f, is_ascii)
         elif environ == "Elements":
-            has_additional_tag_data, cell_tags = _read_cells(
+            has_additional_tag_data, cell_tags, element_tags = _read_cells(
                 f, cells, point_tags, is_ascii
             )
         elif environ == "Periodic":
@@ -72,6 +74,9 @@ def read_buffer(f, is_ascii, data_size):
     if has_additional_tag_data:
         warn("The file contains tag data that couldn't be processed.")
 
+    _align_data(point_data, point_tags)
+    _align_data(cell_data_raw, element_tags)
+    cells = [CellBlock(key, values) for key, values in cells]
     cell_data = cell_data_from_raw(cells, cell_data_raw)
 
     # merge cell_tags into cell_data
@@ -79,7 +84,8 @@ def read_buffer(f, is_ascii, data_size):
         if tag_name not in cell_data:
             cell_data[tag_name] = []
         offset = {}
-        for cell_type, cell_array in cells:
+        for cell in cells:
+            cell_type, cell_array = cell.type, cell.data
             start = offset.setdefault(cell_type, 0)
             end = start + len(cell_array)
             offset[cell_type] = end
@@ -110,8 +116,6 @@ def _read_nodes(f, is_ascii):
         # binary
         dtype = [("index", c_int), ("x", c_double, (3,))]
         data = np.fromfile(f, count=num_nodes, dtype=dtype)
-        if not (data["index"] == range(1, num_nodes + 1)).all():
-            raise ReadError()
         points = np.ascontiguousarray(data["x"])
         point_tags = data["index"]
 
@@ -125,10 +129,11 @@ def _read_cells(f, cells, point_tags, is_ascii):
     total_num_cells = int(line)
     has_additional_tag_data = False
     cell_tags = {}
+    element_tags = []
     if is_ascii:
-        _read_cells_ascii(f, cells, cell_tags, total_num_cells)
+        _read_cells_ascii(f, cells, cell_tags, total_num_cells, element_tags)
     else:
-        _read_cells_binary(f, cells, cell_tags, total_num_cells)
+        _read_cells_binary(f, cells, cell_tags, total_num_cells, element_tags)
 
     # override cells in-place
     cells[:] = [(key, _gmsh_to_meshio_order(key, values)) for key, values in cells]
@@ -165,13 +170,14 @@ def _read_cells(f, cells, point_tags, is_ascii):
                 output_cell_tags["gmsh:geometrical"] = {}
             output_cell_tags["gmsh:geometrical"][cell_type] = geometrical
 
-    return has_additional_tag_data, output_cell_tags
+    return has_additional_tag_data, output_cell_tags, element_tags
 
 
-def _read_cells_ascii(f, cells, cell_tags, total_num_cells: int) -> None:
+def _read_cells_ascii(f, cells, cell_tags, total_num_cells: int, element_tags) -> None:
     for _ in range(total_num_cells):
         line = f.readline().decode()
         data = [int(k) for k in filter(None, line.split())]
+        element_tags.append(data[0])
         t = _gmsh_to_meshio_type[data[1]]
         num_nodes_per_elem = num_nodes_per_cell[t]
 
@@ -204,7 +210,7 @@ def _read_cells_ascii(f, cells, cell_tags, total_num_cells: int) -> None:
     # tags for each cell.
 
 
-def _read_cells_binary(f, cells, cell_tags, total_num_cells):
+def _read_cells_binary(f, cells, cell_tags, total_num_cells, element_tags):
     num_elems = 0
     while num_elems < total_num_cells:
         # read element header
@@ -217,6 +223,7 @@ def _read_cells_binary(f, cells, cell_tags, total_num_cells):
         count = shape[0] * shape[1]
         data = np.fromfile(f, count=count, dtype=c_int).reshape(shape)
 
+        element_tags.extend(data[:, 0])
         if len(cells) == 0 or t != cells[-1][0]:
             cells.append((t, []))
         cells[-1][1].append(data[:, -num_nodes_per_elem:])

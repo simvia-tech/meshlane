@@ -69,14 +69,14 @@ def _read_data(f, tag, data_dict, data_size, is_ascii):
         data = np.fromfile(f, count=num_items * (1 + num_components), sep=" ").reshape(
             (num_items, 1 + num_components)
         )
-        # The first entry is the node number
+        # Retain the node/element tags: record order need not match the mesh.
+        tags = data[:, 0].astype(np.int64)
         data = data[:, 1:]
     else:
         # binary
         dtype = [("index", c_int), ("values", c_double, (num_components,))]
         data = np.fromfile(f, count=num_items, dtype=dtype)
-        if not (data["index"] == range(1, num_items + 1)).all():
-            raise ReadError()
+        tags = data["index"]
         data = np.ascontiguousarray(data["values"])
 
     _fast_forward_to_end_block(f, tag)
@@ -86,7 +86,28 @@ def _read_data(f, tag, data_dict, data_size, is_ascii):
     if data.shape[1] == 1:
         data = data[:, 0]
 
-    data_dict[string_tags[0]] = data
+    data_dict[string_tags[0]] = (tags, data)
+
+
+def _align_data(data_dict, mesh_tags):
+    """Align complete field datasets with the mesh's node/element order."""
+    mesh_tags = np.asarray(mesh_tags)
+    for name, (tags, values) in data_dict.items():
+        if np.array_equal(tags, mesh_tags):
+            data_dict[name] = values
+            continue
+        order = np.argsort(tags)
+        sorted_tags = tags[order]
+        if len(tags) != len(mesh_tags):
+            raise ReadError(f"Data '{name}' tags do not cover the complete mesh.")
+        if len(tags) > 1 and np.any(sorted_tags[1:] == sorted_tags[:-1]):
+            raise ReadError(f"Data '{name}' contains duplicate tags.")
+        indices = np.searchsorted(sorted_tags, mesh_tags)
+        if np.any(indices == len(tags)) or not np.array_equal(
+            sorted_tags[indices], mesh_tags
+        ):
+            raise ReadError(f"Data '{name}' tags do not match the mesh.")
+        data_dict[name] = values[order[indices]]
 
 
 # Translate meshlane types to gmsh codes
