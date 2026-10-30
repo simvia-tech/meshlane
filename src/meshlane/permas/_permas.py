@@ -2,6 +2,8 @@
 I/O for PERMAS dat files.
 """
 
+import gzip
+
 import numpy as np
 
 from ..__about__ import __version__
@@ -59,7 +61,8 @@ meshio_to_permas_type = {v: k for k, v in permas_to_meshio_type.items()}
 
 def read(filename):
     """Reads a PERMAS dat file."""
-    with open_file(filename, "r") as f:
+    opener = gzip.open if str(filename).lower().endswith(".gz") else open_file
+    with opener(filename, "rt") as f:
         out = read_buffer(f)
     return out
 
@@ -230,7 +233,8 @@ def write(filename, mesh):
     else:
         points = mesh.points
 
-    with open_file(filename, "wt") as f:
+    opener = gzip.open if str(filename).lower().endswith(".gz") else open_file
+    with opener(filename, "wt") as f:
         f.write("!PERMAS DataFile Version 18.0\n")
         f.write(f"!written by meshlane v{__version__}\n")
         f.write("$ENTER COMPONENT NAME=DFLT_COMP\n")
