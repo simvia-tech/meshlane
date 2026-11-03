@@ -759,6 +759,7 @@ def write(filename, mesh, binary=True, compression="zlib", header_type=None):
         else:
             da.set("format", "ascii")
             da.text_writer = text_writer_ascii
+        return da
 
     def _polyhedron_face_cells(face_cells):
         # Define the faces of each cell on the format specified for VTU Polyhedron
@@ -792,6 +793,12 @@ def write(filename, mesh, binary=True, compression="zlib", header_type=None):
     vtk_file.insert(1, comment)
 
     grid = ET.SubElement(vtk_file, "UnstructuredGrid")
+
+    if mesh.field_data:
+        field_data = ET.SubElement(grid, "FieldData")
+        for name, data in mesh.field_data.items():
+            da = numpy_to_xml_array(field_data, name, data)
+            da.set("NumberOfTuples", f"{len(data)}")
 
     total_num_cells = sum(len(c.data) for c in mesh.cells)
     piece = ET.SubElement(
