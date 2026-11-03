@@ -144,16 +144,19 @@ def _organize_cells(point_offsets, cells, cell_data_raw):
             out_cells.append(CellBlock(tp, c))
 
     else:
+        cell_data = {}
         for offset, cls, cdr in zip(point_offsets, cells, cell_data_raw):
-            cls, cell_data = vtk_cells_from_data(
+            cls, piece_cell_data = vtk_cells_from_data(
                 cls["connectivity"].ravel(),
                 cls["offsets"].ravel(),
                 cls["types"].ravel(),
                 cdr,
             )
 
-        for c in cls:
-            out_cells.append(CellBlock(c.type, c.data + offset))
+            for c in cls:
+                out_cells.append(CellBlock(c.type, c.data + offset))
+            for name, values in piece_cell_data.items():
+                cell_data.setdefault(name, []).extend(values)
 
     return out_cells, cell_data
 
