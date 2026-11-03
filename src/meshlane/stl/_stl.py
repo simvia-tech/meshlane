@@ -254,7 +254,7 @@ def _write_binary(filename, pts, normals):
         a["normal"] = normals
         a["points"] = pts
         a["attr"] = 0
-        a.tofile(fh)
+        fh.write(a)
 
 
 register_format("stl", [".stl"], read, {"stl": write})
