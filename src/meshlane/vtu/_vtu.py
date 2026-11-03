@@ -445,7 +445,7 @@ class VtuReader:
         self.field_data = field_data
 
     def read_uncompressed_binary(self, data, dtype):
-        byte_string = base64.b64decode(data)
+        data = "".join(data.split())
 
         # the first item is the total_num_bytes, given in header_dtype
         header_dtype = vtu_to_numpy_type[self.header_type]
@@ -454,15 +454,24 @@ class VtuReader:
                 "<" if self.byte_order == "LittleEndian" else ">"
             )
         num_header_bytes = np.dtype(header_dtype).itemsize
-        total_num_bytes = np.frombuffer(byte_string[:num_header_bytes], header_dtype)[0]
+        num_header_chars = num_bytes_to_num_base64_chars(num_header_bytes)
+        byte_string = base64.b64decode(data[:num_header_chars])
+        total_num_bytes = int(
+            np.frombuffer(byte_string[:num_header_bytes], header_dtype)[0]
+        )
 
         # Check if block size was decoded separately
         # (so decoding stopped after block size due to padding)
         if len(byte_string) == num_header_bytes:
-            header_len = len(base64.b64encode(byte_string))
-            byte_string = base64.b64decode(data[header_len:])
+            num_data_chars = num_bytes_to_num_base64_chars(total_num_bytes)
+            byte_string = base64.b64decode(
+                data[num_header_chars : num_header_chars + num_data_chars]
+            )
         else:
-            byte_string = byte_string[num_header_bytes:]
+            num_data_chars = num_bytes_to_num_base64_chars(
+                num_header_bytes + total_num_bytes
+            )
+            byte_string = base64.b64decode(data[:num_data_chars])[num_header_bytes:]
 
         # Read the block data; multiple blocks possible here?
         if self.byte_order is not None:
