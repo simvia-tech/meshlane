@@ -23,7 +23,9 @@ from . import helpers
     ],
 )
 def test_io(mesh, tmp_path):
-    helpers.write_read(tmp_path, meshlane.medit.write, meshlane.medit.read, mesh, 1.0e-15)
+    helpers.write_read(
+        tmp_path, meshlane.medit.write, meshlane.medit.read, mesh, 1.0e-15
+    )
 
 
 def test_generic_io(tmp_path):
@@ -33,6 +35,67 @@ def test_generic_io(tmp_path):
     # same for binary files
     helpers.generic_io(tmp_path / "test.meshb")
     helpers.generic_io(tmp_path / "test.0.meshb")
+
+
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+@pytest.mark.parametrize("column", [False, True])
+@pytest.mark.parametrize("single_cell", [False, True])
+@pytest.mark.parametrize("location", ["point", "cell", "both"])
+def test_scalar_reference_labels(tmp_path, extension, column, single_cell, location):
+    base = helpers.tri_mesh_one_cell if single_cell else helpers.line_tri_mesh
+    point_labels = np.arange(len(base.points), dtype=np.int32)
+    cell_labels = [np.arange(len(block), dtype=np.int32) + 10 for block in base.cells]
+    mesh = meshlane.Mesh(
+        base.points,
+        base.cells,
+        point_data={
+            "medit:ref": (
+                point_labels[:, None]
+                if column and location in ("point", "both")
+                else point_labels
+            )
+        },
+        cell_data={
+            "medit:ref": [
+                values[:, None] if column and location in ("cell", "both") else values
+                for values in cell_labels
+            ]
+        },
+    )
+    path = tmp_path / ("labels" + extension)
+
+    meshlane.write(path, mesh)
+    result = meshlane.read(path)
+
+    np.testing.assert_array_equal(result.point_data["medit:ref"], point_labels)
+    for actual, expected in zip(result.cell_data["medit:ref"], cell_labels):
+        np.testing.assert_array_equal(actual, expected)
+    assert mesh.point_data["medit:ref"].shape == (
+        (len(point_labels), 1)
+        if column and location in ("point", "both")
+        else (len(point_labels),)
+    )
+    for actual, expected in zip(mesh.cell_data["medit:ref"], cell_labels):
+        assert actual.shape == (
+            (len(expected), 1)
+            if column and location in ("cell", "both")
+            else (len(expected),)
+        )
+
+
+@pytest.mark.parametrize("extension", [".mesh", ".meshb"])
+@pytest.mark.parametrize("location", ["point", "cell"])
+def test_reject_multicomponent_reference_labels(tmp_path, extension, location):
+    mesh = meshlane.Mesh(helpers.tri_mesh.points, helpers.tri_mesh.cells)
+    if location == "point":
+        mesh.point_data["medit:ref"] = np.ones((len(mesh.points), 2), dtype=int)
+    else:
+        mesh.cell_data["medit:ref"] = [
+            np.ones((len(block), 2), dtype=int) for block in mesh.cells
+        ]
+
+    with pytest.raises(meshlane.WriteError, match="reference labels must be scalar"):
+        meshlane.write(tmp_path / ("labels" + extension), mesh)
 
 
 # same tests with ugrid format files converted with UGC from

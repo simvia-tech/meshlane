@@ -10,7 +10,7 @@ from ctypes import c_double, c_float
 import numpy as np
 
 from .._common import _pick_first_int_data, warn
-from .._exceptions import ReadError
+from .._exceptions import ReadError, WriteError
 from .._files import open_file
 from .._helpers import register_format
 from .._mesh import Mesh
@@ -297,6 +297,17 @@ def read_ascii_buffer(f):
     return Mesh(points, cells, point_data=point_data, cell_data=cell_data)
 
 
+def _scalar_reference_labels(labels):
+    labels = np.asarray(labels)
+    if labels.ndim == 2 and labels.shape[1] == 1:
+        return labels[:, 0]
+    if labels.ndim != 1:
+        raise WriteError(
+            "Medit reference labels must be scalar: expected (n,) or (n, 1)."
+        )
+    return labels
+
+
 def write(filename, mesh, float_fmt=".16e"):
     if str(filename)[-1] == "b":
         write_binary_file(filename, mesh)
@@ -327,6 +338,7 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
                 f"Picking {labels_key}, skipping {string}."
             )
         labels = mesh.point_data[labels_key] if labels_key else np.ones(n, dtype=int)
+        labels = _scalar_reference_labels(labels)
 
         fmt = " ".join(["{:" + float_fmt + "}"] * d) + " {:d}\n"
         for x, label in zip(mesh.points, labels):
@@ -370,6 +382,7 @@ def write_ascii_file(filename, mesh, float_fmt=".16e"):
                 if labels_key
                 else np.ones(len(data), dtype=data.dtype)
             )
+            labels = _scalar_reference_labels(labels)
 
             fmt = " ".join(["{:d}"] * (num + 1)) + "\n"
             # adapt 1-base
@@ -450,6 +463,7 @@ def write_binary_file(f, mesh):
             if labels_key
             else np.ones(num_verts, dtype=itype)
         )
+        labels = _scalar_reference_labels(labels)
 
         tmp_array = np.empty(num_verts, dtype=dtype)
         tmp_array["f0"] = mesh.points
@@ -502,6 +516,7 @@ def write_binary_file(f, mesh):
                 if labels_key
                 else np.ones(len(cell_block.data), dtype=cell_block.data.dtype)
             )
+            labels = _scalar_reference_labels(labels)
             field_template = medit_codes[medit_key][2]
             dtype = np.dtype(_produce_dtype(field_template, dim, itype, ftype))
 
