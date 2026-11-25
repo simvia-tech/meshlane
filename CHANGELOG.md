@@ -6,6 +6,22 @@ fixes, enhancements etc., best follow [the meshio project on
 GitHub](https://github.com/nschloe/meshio). meshlane-specific changes are listed at the
 top; the meshio history follows below.
 
+## Unreleased
+
+### Fixed
+- OpenFOAM reader: warped hexahedra (and tetrahedra, pyramids, wedges) are no longer
+  turned inside out. The cell orientation now comes from the outward faces given by
+  owner/neighbour instead of a sign test on one corner, which disagreed with the cell
+  volume on distorted cells: on a 1.15 M cell snappyHexMesh mesh, 88 hexahedra came out
+  with a negative volume. Reading is also about twice as fast.
+- OpenFOAM reader: a cell with the face count of a tetra, pyramid, wedge or hexahedron
+  but another topology is kept as a polyhedron; it used to be dropped with a warning.
+
+### Changed
+- OpenFOAM reader: the volume cells are rebuilt with numpy instead of a Python loop
+  over the cells, about 5x faster (1.15 M cells: 15 s → 3 s; whole read 23 s → 10 s)
+  for about 17 % more peak memory.
+
 ## meshlane 5.6.0 (Oct 29, 2026)
 
 ### Added
