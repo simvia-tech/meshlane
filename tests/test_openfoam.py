@@ -38,7 +38,6 @@ from meshlane.openfoam._openfoam import (
     _reconstruct_cell,
     _resolve_polymesh,
     _strip_comments,
-    _triple,
     read,
 )
 
@@ -64,6 +63,37 @@ BINARY_HEADER = """FoamFile
     object      {obj};
 }}
 """
+
+
+def _corner_triple(p, i=1, j=2, k=3):
+    """Scalar triple product of the edges from p[0] to p[i], p[j], p[k]."""
+    return float(np.dot(p[i] - p[0], np.cross(p[j] - p[0], p[k] - p[0])))
+
+
+# Outward faces of the meshlane hexahedron, in local node indices.
+HEX_FACES = [
+    (0, 3, 2, 1),
+    (4, 5, 6, 7),
+    (0, 1, 5, 4),
+    (1, 2, 6, 5),
+    (2, 3, 7, 6),
+    (3, 0, 4, 7),
+]
+
+
+def _hex_volume(points, conn):
+    """Signed volume of a hexahedron, from its outward faces (each face fanned
+    around its centroid, closed with the cell centroid)."""
+    X = points[np.asarray(conn)]
+    c = X.mean(axis=0)
+    vol = 0.0
+    for f in HEX_FACES:
+        F = X[list(f)]
+        fc = F.mean(axis=0)
+        for i in range(len(f)):
+            a, b = F[i] - c, F[(i + 1) % len(f)] - c
+            vol += np.dot(a, np.cross(b, fc - c)) / 6
+    return vol
 
 
 def _write_ascii_points(path: Path, points: np.ndarray) -> None:
@@ -318,26 +348,6 @@ class TestParseBoundary:
         assert patches["wall1"]["type"] == "wall"
 
 
-class TestTriple:
-    def test_positive(self):
-        a = np.array([1.0, 0, 0])
-        b = np.array([0, 1.0, 0])
-        c = np.array([0, 0, 1.0])
-        assert _triple(a, b, c) == pytest.approx(1.0)
-
-    def test_negative(self):
-        a = np.array([1.0, 0, 0])
-        b = np.array([0, 0, 1.0])
-        c = np.array([0, 1.0, 0])
-        assert _triple(a, b, c) == pytest.approx(-1.0)
-
-    def test_zero_for_coplanar(self):
-        a = np.array([1.0, 0, 0])
-        b = np.array([0, 1.0, 0])
-        c = np.array([1.0, 1.0, 0])
-        assert _triple(a, b, c) == pytest.approx(0.0)
-
-
 class TestNodeAdjacency:
     def test_triangle(self):
         adj = _node_adjacency([[0, 1, 2]])
@@ -447,33 +457,23 @@ class TestBuildTetra:
             [1, 2, 3],
             [0, 3, 2],
         ]
-        conn = _build_tetra(oriented, P)
+        conn = _build_tetra(oriented)
         assert len(conn) == 4
         assert set(conn) == {0, 1, 2, 3}
         p = [P[i] for i in conn]
-        assert _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) >= 0
+        assert _corner_triple(p) > 0
 
     def test_positive_volume(self):
         """Orientation must always yield positive triple product."""
         P = np.array([[0, 0, 0], [2, 0, 0], [0, 2, 0], [0, 0, 2]], dtype=float)
-        oriented = [[0, 1, 2], [0, 3, 1], [1, 3, 2], [0, 2, 3]]
-        conn = _build_tetra(oriented, P)
+        oriented = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]
+        conn = _build_tetra(oriented)
         p = [P[i] for i in conn]
-        assert _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) >= 0
+        assert _corner_triple(p) > 0
 
 
 class TestBuildPyramid:
     def test_basic(self):
-        P = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0.5, 0.5, 1],
-            ],
-            dtype=float,
-        )
         oriented = [
             [0, 3, 2, 1],  # square base (outward = -z)
             [0, 1, 4],
@@ -481,21 +481,11 @@ class TestBuildPyramid:
             [2, 3, 4],
             [3, 0, 4],
         ]
-        conn = _build_pyramid(oriented, P)
+        conn = _build_pyramid(oriented)
         assert len(conn) == 5
         assert set(conn) == {0, 1, 2, 3, 4}
 
     def test_apex_is_last(self):
-        P = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0.5, 0.5, 1],
-            ],
-            dtype=float,
-        )
         oriented = [
             [0, 3, 2, 1],
             [0, 1, 4],
@@ -503,24 +493,13 @@ class TestBuildPyramid:
             [2, 3, 4],
             [3, 0, 4],
         ]
-        conn = _build_pyramid(oriented, P)
+        conn = _build_pyramid(oriented)
         # Apex (node 4) must be last in meshlane convention
         assert conn[-1] == 4
 
 
 class TestBuildWedge:
     def test_basic(self):
-        P = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [0.5, 1, 0],
-                [0, 0, 1],
-                [1, 0, 1],
-                [0.5, 1, 1],
-            ],
-            dtype=float,
-        )
         oriented = [
             [0, 2, 1],  # bottom triangle
             [3, 4, 5],  # top triangle
@@ -528,7 +507,7 @@ class TestBuildWedge:
             [1, 2, 5, 4],
             [2, 0, 3, 5],
         ]
-        conn = _build_wedge(oriented, P)
+        conn = _build_wedge(oriented)
         assert conn is not None
         assert len(conn) == 6
         assert set(conn) == {0, 1, 2, 3, 4, 5}
@@ -552,61 +531,62 @@ class TestBuildWedge:
             [1, 2, 5, 4],
             [2, 0, 3, 5],
         ]
-        conn = _build_wedge(oriented, P)
+        conn = _build_wedge(oriented)
         p = [P[i] for i in conn]
         # Positive signed volume
-        assert _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) >= 0
+        assert _corner_triple(p) > 0
 
 
 class TestBuildHexahedron:
     def test_basic(self, hex_cube_data):
         points, faces, *_ = hex_cube_data
-        conn = _build_hexahedron(faces, points)
+        conn = _build_hexahedron(faces)
         assert conn is not None
         assert len(conn) == 8
         assert set(conn) == set(range(8))
 
     def test_positive_volume(self, hex_cube_data):
         points, faces, *_ = hex_cube_data
-        conn = _build_hexahedron(faces, points)
+        conn = _build_hexahedron(faces)
         p = [points[i] for i in conn]
-        assert _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) >= 0
+        assert _corner_triple(p, 1, 3, 4) > 0
 
     def test_ambiguous_topology_returns_none(self):
         """Degenerate face list that cannot yield a valid top ring."""
-        P = np.zeros((8, 3))
         ambiguous = [[0, 1, 2, 3]] * 6  # every face is identical
-        result = _build_hexahedron(ambiguous, P)
+        result = _build_hexahedron(ambiguous)
         assert result is None
+
+    def test_warped_hex_keeps_positive_volume(self, hex_cube_data):
+        """A warped hex whose corner triple product has the wrong sign must not be
+        flipped: the orientation comes from the outward faces, not from one corner.
+        """
+        points, faces, *_ = hex_cube_data
+        points = points.copy()
+        points[4] = [0.5, 0.5, -0.1]  # node 4 dips below the bottom face
+        # At corner 0 (edges to nodes 1, 3, 4) the triple product is negative
+        # although the cell volume is positive.
+        assert _corner_triple(points, 1, 3, 4) < 0
+        conn = _build_hexahedron(faces)
+        assert sorted(conn) == list(range(8))
+        assert _hex_volume(points, conn) > 0
 
 
 class TestReconstructCell:
     def test_hex(self, hex_cube_data):
         points, faces, *_ = hex_cube_data
-        mtype, conn = _reconstruct_cell(faces, points)
+        mtype, conn = _reconstruct_cell(faces)
         assert mtype == "hexahedron"
         assert len(conn) == 8
         assert set(conn) == set(range(8))
 
     def test_tetra(self):
-        P = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float)
         oriented = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]
-        mtype, conn = _reconstruct_cell(oriented, P)
+        mtype, conn = _reconstruct_cell(oriented)
         assert mtype == "tetra"
         assert len(conn) == 4
 
     def test_wedge(self):
-        P = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [0.5, 1, 0],
-                [0, 0, 1],
-                [1, 0, 1],
-                [0.5, 1, 1],
-            ],
-            dtype=float,
-        )
         oriented = [
             [0, 2, 1],
             [3, 4, 5],
@@ -614,21 +594,11 @@ class TestReconstructCell:
             [1, 2, 5, 4],
             [2, 0, 3, 5],
         ]
-        mtype, conn = _reconstruct_cell(oriented, P)
+        mtype, conn = _reconstruct_cell(oriented)
         assert mtype == "wedge"
         assert len(conn) == 6
 
     def test_pyramid(self):
-        P = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0.5, 0.5, 1],
-            ],
-            dtype=float,
-        )
         oriented = [
             [0, 3, 2, 1],
             [0, 1, 4],
@@ -636,14 +606,13 @@ class TestReconstructCell:
             [2, 3, 4],
             [3, 0, 4],
         ]
-        mtype, conn = _reconstruct_cell(oriented, P)
+        mtype, conn = _reconstruct_cell(oriented)
         assert mtype == "pyramid"
         assert len(conn) == 5
 
     def test_polyhedron_general(self):
         oriented = [[0, 1, 2]] * 7
-        P = np.zeros((3, 3))
-        mtype, conn = _reconstruct_cell(oriented, P)
+        mtype, conn = _reconstruct_cell(oriented)
         assert mtype == "polyhedron"
 
 
@@ -696,7 +665,7 @@ class TestBuildVolumeCells:
         points, faces, owner, neighbour, _ = hex_cube_data
         owner_arr = np.array(owner)
         neighbour_arr = np.array(neighbour, dtype=int)
-        cells = _build_volume_cells(1, faces, owner_arr, neighbour_arr, points)
+        cells = _build_volume_cells(1, faces, owner_arr, neighbour_arr)
         hex_blocks = [cb for cb in cells if cb.type == "hexahedron"]
         assert len(hex_blocks) == 1
         assert len(hex_blocks[0].data) == 1
@@ -704,7 +673,7 @@ class TestBuildVolumeCells:
     def test_returns_cell_blocks(self, hex_cube_data):
         points, faces, owner, neighbour, _ = hex_cube_data
         cells = _build_volume_cells(
-            1, faces, np.array(owner), np.array(neighbour, dtype=int), points
+            1, faces, np.array(owner), np.array(neighbour, dtype=int)
         )
         from meshlane._mesh import CellBlock
 
@@ -712,23 +681,6 @@ class TestBuildVolumeCells:
 
     def test_two_hexes(self):
         """Two hexahedral cells sharing one internal face."""
-        points = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 1],
-                [1, 0, 1],
-                [1, 1, 1],
-                [0, 1, 1],
-                [2, 0, 0],
-                [2, 1, 0],
-                [2, 0, 1],
-                [2, 1, 1],
-            ],
-            dtype=float,
-        )
         faces = [
             [1, 2, 6, 5],  # internal
             [0, 3, 2, 1],
@@ -744,7 +696,7 @@ class TestBuildVolumeCells:
         ]
         owner = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         neighbour = np.array([1])
-        cells = _build_volume_cells(2, faces, owner, neighbour, points)
+        cells = _build_volume_cells(2, faces, owner, neighbour)
         n_hex = sum(len(cb.data) for cb in cells if cb.type == "hexahedron")
         assert n_hex == 2
 

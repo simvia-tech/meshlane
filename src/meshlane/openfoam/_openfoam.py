@@ -423,11 +423,6 @@ def _read_int_list(path: Path) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _triple(a, b, c) -> float:
-    """Scalar triple product a · (b × c)."""
-    return float(np.dot(a, np.cross(b, c)))
-
-
 def _node_adjacency(faces) -> dict:
     """Build a node-to-node adjacency dict from a list of faces."""
     adj: dict[int, set] = {}
@@ -496,52 +491,44 @@ def _match_top(bottom, oriented):
     return top
 
 
-def _build_tetra(oriented, P):
-    """Build a tetrahedron connectivity with positive volume orientation."""
-    base = oriented[0]
+# The faces of a cell come oriented outward (see _outward_faces), so the cell
+# orientation follows from the topology alone: meshlane orders the base of a
+# cell so that its normal points into the cell, which is the outward base face
+# reversed. No geometric test is involved: a sign test on one corner (scalar
+# triple product) disagrees with the cell volume on warped cells and would
+# flip them.
+
+
+def _build_tetra(oriented):
+    """Build a tetrahedron connectivity from its outward faces."""
+    base = oriented[0][::-1]
     apex = (set().union(*oriented) - set(base)).pop()
-    n = [base[0], base[1], base[2], apex]
-    p = [P[i] for i in n]
-    if _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) < 0:
-        n = [base[0], base[2], base[1], apex]
-    return n
+    return list(base) + [apex]
 
 
-def _build_pyramid(oriented, P):
-    """Build a pyramid connectivity with positive volume orientation."""
-    quad = next(f for f in oriented if len(f) == 4)
+def _build_pyramid(oriented):
+    """Build a pyramid connectivity (quad base, then apex) from its outward faces."""
+    quad = next(f for f in oriented if len(f) == 4)[::-1]
     apex = (set().union(*oriented) - set(quad)).pop()
-    n = list(quad) + [apex]
-    p = [P[i] for i in n]
-    if _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) < 0:
-        n = [quad[0], quad[3], quad[2], quad[1], apex]
-    return n
+    return list(quad) + [apex]
 
 
-def _build_wedge(oriented, P):
-    """Build a wedge connectivity with positive volume orientation."""
-    bottom = next(f for f in oriented if len(f) == 3)
+def _build_wedge(oriented):
+    """Build a wedge connectivity from its outward faces."""
+    bottom = next(f for f in oriented if len(f) == 3)[::-1]
     top = _match_top(bottom, oriented)
     if top is None:
         return None
-    n = list(bottom) + top
-    p = [P[i] for i in n]
-    if _triple(p[1] - p[0], p[2] - p[0], p[3] - p[0]) < 0:
-        n = [bottom[0], bottom[2], bottom[1], top[0], top[2], top[1]]
-    return n
+    return list(bottom) + top
 
 
-def _build_hexahedron(oriented, P):
-    """Build a hexahedron connectivity with positive volume orientation."""
-    bottom = next(f for f in oriented if len(f) == 4)
+def _build_hexahedron(oriented):
+    """Build a hexahedron connectivity from its outward faces."""
+    bottom = next(f for f in oriented if len(f) == 4)[::-1]
     top = _match_top(bottom, oriented)
     if top is None:
         return None
-    n = list(bottom) + top
-    p = [P[i] for i in n]
-    if _triple(p[1] - p[0], p[3] - p[0], p[4] - p[0]) < 0:
-        n = [bottom[0], bottom[3], bottom[2], bottom[1], top[0], top[3], top[2], top[1]]
-    return n
+    return list(bottom) + top
 
 
 def _build_boundary_polygons(poly_faces, poly_tags):
@@ -573,7 +560,7 @@ def _build_polyhedra(poly_cells):
     return cells
 
 
-def _reconstruct_cell(oriented, P):
+def _reconstruct_cell(oriented):
     """
     Classify a cell by (n_faces, n_points).
 
@@ -585,19 +572,19 @@ def _reconstruct_cell(oriented, P):
     n_pts = len(set().union(*oriented))
 
     if n_faces == 4 and n_pts == 4:
-        return "tetra", _build_tetra(oriented, P)
+        return "tetra", _build_tetra(oriented)
     if n_faces == 5 and n_pts == 5:
-        return "pyramid", _build_pyramid(oriented, P)
+        return "pyramid", _build_pyramid(oriented)
     if n_faces == 5 and n_pts == 6:
-        return "wedge", _build_wedge(oriented, P)
+        return "wedge", _build_wedge(oriented)
     if n_faces == 6 and n_pts == 8:
-        return "hexahedron", _build_hexahedron(oriented, P)
+        return "hexahedron", _build_hexahedron(oriented)
 
     # General polyhedron: keep outward-oriented faces
     return "polyhedron", oriented
 
 
-def _build_volume_cells(n_cells, faces, owner, neighbour, P):
+def _build_volume_cells(n_cells, faces, owner, neighbour):
     """
     Build volume CellBlocks from raw polyMesh data.
 
@@ -618,7 +605,7 @@ def _build_volume_cells(n_cells, faces, owner, neighbour, P):
             list(faces[f]) if int(owner[f]) == cell_id else list(faces[f])[::-1]
             for f in cell_faces[cell_id]
         ]
-        mtype, conn = _reconstruct_cell(oriented, P)
+        mtype, conn = _reconstruct_cell(oriented)
 
         if mtype == "polyhedron":
             poly_cells.append(conn)
@@ -746,7 +733,7 @@ def read(filename) -> Mesh:
         len(boundary),
     )
 
-    vol_cells = _build_volume_cells(n_cells, faces, owner, neighbour, points)
+    vol_cells = _build_volume_cells(n_cells, faces, owner, neighbour)
     patch_cells, patch_tags_data, patch_tags = _build_boundary_cells(boundary, faces)
 
     cells = vol_cells + patch_cells
