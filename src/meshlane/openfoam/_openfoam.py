@@ -418,119 +418,6 @@ def _read_int_list(path: Path) -> np.ndarray:
     return _parse_int_list_ascii(_read_foam_lines(path))
 
 
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
-
-
-def _node_adjacency(faces) -> dict:
-    """Build a node-to-node adjacency dict from a list of faces."""
-    adj: dict[int, set] = {}
-    for f in faces:
-        m = len(f)
-        for i in range(m):
-            a, b = f[i], f[(i + 1) % m]
-            adj.setdefault(a, set()).add(b)
-            adj.setdefault(b, set()).add(a)
-    return adj
-
-
-def _cell_faces_csr(n_cells, owner, neighbour) -> _RaggedArray:
-    """
-    Vectorised cell -> faces topology as a CSR :class:`_RaggedArray`.
-
-    Row ``c`` holds the ids of every face touching cell ``c``. Handles both
-    neighbour conventions: length nInternalFaces (standard OpenFOAM), or
-    length nFaces with -1 on boundary faces.
-    """
-    if n_cells == 0:
-        return _RaggedArray(np.empty(0, dtype=np.int64), np.zeros(1, dtype=np.int64))
-
-    internal = neighbour >= 0
-    cell_of = np.concatenate([owner, neighbour[internal]])
-    face_of = np.concatenate(
-        [np.arange(len(owner)), np.arange(len(neighbour))[internal]]
-    )
-    order = np.argsort(cell_of, kind="stable")  # group faces by cell id
-    cf_flat = face_of[order]
-
-    fpc = np.bincount(cell_of, minlength=n_cells)
-    cf_off = np.empty(n_cells + 1, dtype=np.int64)
-    cf_off[0] = 0
-    np.cumsum(fpc, out=cf_off[1:])
-    return _RaggedArray(cf_flat, cf_off)
-
-
-def _outward_faces(cell_faces, faces, owner, cell_id):
-    """
-    Returns the faces of the cell oriented outward.
-
-    The stored normal points from owner to neighbour (outward from owner).
-    For the neighbour cell, the winding is reversed.
-    """
-    oriented = []
-    for fid in cell_faces:
-        f = faces[fid]
-        oriented.append(list(f) if int(owner[fid]) == cell_id else list(reversed(f)))
-    return oriented
-
-
-def _match_top(bottom, oriented):
-    """
-    For each base node, find its unique vertical neighbour.
-    Returns the ordered top ring, or None if the topology is ambiguous.
-    """
-    adj = _node_adjacency(oriented)
-    base = set(bottom)
-    top = []
-    for b in bottom:
-        cand = [x for x in adj[b] if x not in base]
-        if len(cand) != 1:
-            return None
-        top.append(cand[0])
-    return top
-
-
-# The faces of a cell come oriented outward (see _outward_faces), so the cell
-# orientation follows from the topology alone: meshlane orders the base of a
-# cell so that its normal points into the cell, which is the outward base face
-# reversed. No geometric test is involved: a sign test on one corner (scalar
-# triple product) disagrees with the cell volume on warped cells and would
-# flip them.
-
-
-def _build_tetra(oriented):
-    """Build a tetrahedron connectivity from its outward faces."""
-    base = oriented[0][::-1]
-    apex = (set().union(*oriented) - set(base)).pop()
-    return list(base) + [apex]
-
-
-def _build_pyramid(oriented):
-    """Build a pyramid connectivity (quad base, then apex) from its outward faces."""
-    quad = next(f for f in oriented if len(f) == 4)[::-1]
-    apex = (set().union(*oriented) - set(quad)).pop()
-    return list(quad) + [apex]
-
-
-def _build_wedge(oriented):
-    """Build a wedge connectivity from its outward faces."""
-    bottom = next(f for f in oriented if len(f) == 3)[::-1]
-    top = _match_top(bottom, oriented)
-    if top is None:
-        return None
-    return list(bottom) + top
-
-
-def _build_hexahedron(oriented):
-    """Build a hexahedron connectivity from its outward faces."""
-    bottom = next(f for f in oriented if len(f) == 4)[::-1]
-    top = _match_top(bottom, oriented)
-    if top is None:
-        return None
-    return list(bottom) + top
-
-
 def _build_boundary_polygons(poly_faces, poly_tags):
     """Split boundary polygons by vertex count -> polygonN CellBlocks."""
     by_n = defaultdict(list)
@@ -545,85 +432,179 @@ def _build_boundary_polygons(poly_faces, poly_tags):
     return cells, tags
 
 
-def _build_polyhedra(poly_cells):
-    """Split general polyhedra by unique node count -> polyhedronN CellBlocks."""
-    by_n = defaultdict(list)
-    for oriented in poly_cells:
-        n_nodes = len(set().union(*oriented))
-        by_n[n_nodes].append([list(f) for f in oriented])
-    cells = []
-    for n_nodes, polys in by_n.items():
-        data = np.empty(len(polys), dtype=object)
-        for i, p in enumerate(polys):
-            data[i] = [np.array(f, dtype=int) for f in p]
-        cells.append(CellBlock(f"polyhedron{n_nodes}", data))
-    return cells
+# ---------------------------------------------------------------------------
+# Volume cells
+# ---------------------------------------------------------------------------
+#
+# The cells are rebuilt from their faces with numpy, one cell type at a time. A
+# face normal points out of its owner (OpenFOAM convention), so a face is outward
+# for its owner and reversed for its neighbour, and each cell's orientation follows
+# from this topology alone: the base of a meshlane cell is its outward base face
+# reversed. No geometric test is involved (a sign test on one corner disagrees
+# with the cell volume on warped cells and would flip them). Cells that are not a
+# regular tetra, pyramid, wedge or hexahedron are kept as ``polyhedron<N>``.
 
 
-def _reconstruct_cell(oriented):
-    """
-    Classify a cell by (n_faces, n_points).
+class _CellFaces:
+    """The faces of every cell, sorted by cell then by face size, each with a flag
+    telling whether its stored node order must be reversed to point outward."""
 
-    Returns (meshio_type, connectivity) where:
-      - for standard types : connectivity is a flat list of point ids
-      - for 'polyhedron'   : connectivity is the list of outward-oriented faces
-    """
-    n_faces = len(oriented)
-    n_pts = len(set().union(*oriented))
+    def __init__(self, faces: _RaggedArray, owner, neighbour, n_cells):
+        self.nodes = faces.conn
+        self.ptr = faces.off
+        self.size = np.diff(faces.off)
+        f0 = np.arange(len(owner))
+        f1 = np.flatnonzero(neighbour >= 0)
+        cell = np.concatenate([owner, neighbour[f1]])
+        face = np.concatenate([f0, f1])
+        rev = np.concatenate([np.zeros(len(f0), bool), np.ones(len(f1), bool)])
+        order = np.lexsort((self.size[face], cell))
+        self.face = face[order]
+        self.rev = rev[order]
+        cell = cell[order]
+        self.num = np.bincount(cell, minlength=n_cells)
+        self.offset = np.concatenate([[0], np.cumsum(self.num)])
+        size = self.size[self.face]
+        self.num_tri = np.bincount(cell, weights=size == 3, minlength=n_cells)
+        self.num_quad = np.bincount(cell, weights=size == 4, minlength=n_cells)
 
-    if n_faces == 4 and n_pts == 4:
-        return "tetra", _build_tetra(oriented)
-    if n_faces == 5 and n_pts == 5:
-        return "pyramid", _build_pyramid(oriented)
-    if n_faces == 5 and n_pts == 6:
-        return "wedge", _build_wedge(oriented)
-    if n_faces == 6 and n_pts == 8:
-        return "hexahedron", _build_hexahedron(oriented)
+    def slot(self, cells, j, k):
+        """Outward nodes (len(cells), k) of the j-th face of each cell, which must
+        have k nodes."""
+        h = self.offset[cells] + j
+        nodes = self.nodes[self.ptr[self.face[h]][:, None] + np.arange(k)]
+        return np.where(self.rev[h][:, None], nodes[:, ::-1], nodes)
 
-    # General polyhedron: keep outward-oriented faces
-    return "polyhedron", oriented
+
+def _isin_rows(a, b):
+    """a[i, j] in b[i, :] for every row i."""
+    return (a[:, :, None] == b[:, None, :]).any(axis=2)
+
+
+def _apex(base, face):
+    """The single node of face not in base, and whether there is exactly one."""
+    mask = ~_isin_rows(face, base)
+    ok = mask.sum(axis=1) == 1
+    return face[np.arange(len(face)), mask.argmax(axis=1)], ok
+
+
+def _top(base, sides):
+    """For each node of the base face, its neighbour off the base (along the edges
+    of the side faces), and whether it is unique for every node."""
+    e0 = np.concatenate(sides, axis=1)
+    e1 = np.concatenate([np.roll(s, -1, axis=1) for s in sides], axis=1)
+    in0 = _isin_rows(e0, base)
+    in1 = _isin_rows(e1, base)
+    top = np.empty_like(base)
+    ok = np.ones(len(base), dtype=bool)
+    for k in range(base.shape[1]):
+        b = base[:, k : k + 1]
+        cand = np.where((e0 == b) & ~in1, e1, np.where((e1 == b) & ~in0, e0, -1))
+        hi = cand.max(axis=1)
+        lo = np.where(cand < 0, np.iinfo(cand.dtype).max, cand).min(axis=1)
+        ok &= (hi >= 0) & (hi == lo)
+        top[:, k] = hi
+    return top, ok
+
+
+# Face sizes of each regular cell type, in the sorted order of _CellFaces.
+_CELL_FACE_SIZES = {
+    "tetra": [3, 3, 3, 3],
+    "pyramid": [3, 3, 3, 3, 4],
+    "wedge": [3, 3, 4, 4, 4],
+    "hexahedron": [4] * 6,
+}
+
+
+def _build_regular(cf, cells, kind):
+    """Connectivity of cells of one regular type, and which ones are valid."""
+    if kind == "tetra":
+        base = cf.slot(cells, 0, 3)[:, ::-1]
+        apex, ok = _apex(base, cf.slot(cells, 1, 3))
+        conn = np.column_stack([base, apex])
+    elif kind == "pyramid":
+        base = cf.slot(cells, 4, 4)[:, ::-1]  # the quad comes after the triangles
+        apex, ok = _apex(base, cf.slot(cells, 0, 3))
+        conn = np.column_stack([base, apex])
+    else:
+        sizes = _CELL_FACE_SIZES[kind]
+        slots = [cf.slot(cells, j, k) for j, k in enumerate(sizes)]
+        top, ok = _top(slots[0][:, ::-1], slots[1:])
+        conn = np.column_stack([slots[0][:, ::-1], top])
+    distinct = (np.diff(np.sort(conn, axis=1), axis=1) != 0).all(axis=1)
+    return conn, ok & distinct
+
+
+def _build_polyhedra(cf, cells):
+    """``polyhedron<N>`` CellBlocks (each cell: list of outward faces, N: its number
+    of distinct nodes) for the given cells, in cell id order within each block."""
+    if len(cells) == 0:
+        return []
+    num = cf.num[cells]
+    cell_ptr = np.concatenate([[0], np.cumsum(num)])
+    h = np.repeat(cf.offset[cells] - cell_ptr[:-1], num) + np.arange(cell_ptr[-1])
+    f = cf.face[h]
+    size = cf.size[f]
+    face_ptr = np.concatenate([[0], np.cumsum(size)])
+
+    # outward node list of every face, all in one array
+    within = np.arange(face_ptr[-1]) - np.repeat(face_ptr[:-1], size)
+    within = np.where(
+        np.repeat(cf.rev[h], size), np.repeat(size - 1, size) - within, within
+    )
+    flat = cf.nodes[within + np.repeat(cf.ptr[f], size)]
+
+    # number of distinct nodes of each cell
+    base = int(flat.max(initial=0)) + 1
+    key = np.repeat(np.repeat(np.arange(len(cells), dtype=np.int64), num), size)
+    key = np.unique(key * base + flat)
+    num_nodes = np.bincount(key // base, minlength=len(cells))
+
+    views = [flat[a:b] for a, b in zip(face_ptr[:-1].tolist(), face_ptr[1:].tolist())]
+    cp = cell_ptr.tolist()
+    blocks = []
+    for n in np.unique(num_nodes):
+        sel = np.flatnonzero(num_nodes == n).tolist()
+        data = np.empty(len(sel), dtype=object)
+        for i, c in enumerate(sel):
+            data[i] = views[cp[c] : cp[c + 1]]
+        blocks.append(CellBlock(f"polyhedron{n}", data))
+    return blocks
 
 
 def _build_volume_cells(n_cells, faces, owner, neighbour):
-    """
-    Build volume CellBlocks from raw polyMesh data.
+    """Build the volume CellBlocks (rows sorted by cell id within each block)."""
+    if n_cells == 0:
+        return []
+    if not isinstance(faces, _RaggedArray):
+        faces = _RaggedArray.from_lists(faces)
+    owner = np.asarray(owner, dtype=np.int64)
+    nb = np.full(len(owner), -1, dtype=np.int64)
+    neighbour = np.asarray(neighbour, dtype=np.int64)
+    nb[: len(neighbour)] = neighbour[: len(owner)]
+    cf = _CellFaces(faces, owner, nb, n_cells)
+    num, tri, quad = cf.num, cf.num_tri, cf.num_quad
+    masks = {
+        "tetra": (num == 4) & (tri == 4),
+        "pyramid": (num == 5) & (tri == 4) & (quad == 1),
+        "wedge": (num == 5) & (tri == 2) & (quad == 3),
+        "hexahedron": (num == 6) & (quad == 6),
+    }
 
-    Uses a vectorised CSR cell -> faces topology and reads each face from the
-    CSR ``_RaggedArray`` (or a plain list of faces), so peak memory stays bounded
-    even for meshes with millions of cells. The per-cell classification reuses
-    the orientation-aware reconstruction helpers unchanged.
-    """
-    cell_faces = _cell_faces_csr(n_cells, owner, neighbour)
-    owner = np.asarray(owner)
-
-    buckets: dict[str, list] = {}
-    poly_cells: list = []
-    n_skipped = 0
-
-    for cell_id in range(n_cells):
-        oriented = [
-            list(faces[f]) if int(owner[f]) == cell_id else list(faces[f])[::-1]
-            for f in cell_faces[cell_id]
-        ]
-        mtype, conn = _reconstruct_cell(oriented)
-
-        if mtype == "polyhedron":
-            poly_cells.append(conn)
-        elif conn is None:
-            n_skipped += 1
-        else:
-            buckets.setdefault(mtype, []).append(conn)
-
-    if n_skipped:
-        logger.warning("%d cell(s) skipped (degenerate topology).", n_skipped)
-    if poly_cells:
-        logger.info("%d general polyhedron cell(s) found.", len(poly_cells))
-
-    cells = [CellBlock(t, np.array(c, dtype=int)) for t, c in buckets.items()]
-
-    if poly_cells:
-        cells.extend(_build_polyhedra(poly_cells))
-
+    cells = []
+    other = ~np.logical_or.reduce(list(masks.values())) & (num > 0)
+    for kind, mask in masks.items():
+        ids = np.flatnonzero(mask)
+        if len(ids) == 0:
+            continue
+        conn, ok = _build_regular(cf, ids, kind)
+        if ok.any():
+            cells.append(CellBlock(kind, conn[ok]))
+        other[ids[~ok]] = True
+    poly = np.flatnonzero(other)
+    if len(poly):
+        logger.info("%d general polyhedron cell(s) found.", len(poly))
+    cells.extend(_build_polyhedra(cf, poly))
     return cells
 
 
